@@ -1,0 +1,548 @@
+{
+  "entities": {
+    "HubPublic": {
+      "title": "HubPublic",
+      "description": "Public showcase configuration for the single-owner Link Hub (profile bio, Pantone design system, socials, music card, custom categories, blog posts, and section visibility). Contains zero visitor PII.",
+      "type": "object",
+      "properties": {
+        "ownerUid": {
+          "type": "string",
+          "description": "Verified solo owner Firebase Auth UID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "profile": {
+          "type": "object",
+          "description": "Public portfolio profile metadata"
+        },
+        "designSystem": {
+          "type": "object",
+          "description": "Active Pantone Color Institute design tokens"
+        },
+        "featuredSong": {
+          "type": "object",
+          "description": "Featured track card metadata"
+        },
+        "socials": {
+          "type": "array",
+          "description": "Bounded list of up to 20 social links"
+        },
+        "posts": {
+          "type": "array",
+          "description": "Bounded list of up to 100 blog posts"
+        },
+        "customCategories": {
+          "type": "array",
+          "description": "Bounded list of up to 30 custom link categories"
+        },
+        "showGithubSection": {
+          "type": "boolean"
+        },
+        "showSongCard": {
+          "type": "boolean"
+        },
+        "showMapCard": {
+          "type": "boolean"
+        },
+        "showContactSection": {
+          "type": "boolean"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerUid",
+        "profile",
+        "designSystem",
+        "featuredSong",
+        "socials",
+        "posts",
+        "customCategories",
+        "showGithubSection",
+        "showSongCard",
+        "showMapCard",
+        "showContactSection",
+        "updatedAt"
+      ]
+    },
+    "HubLink": {
+      "title": "HubLink",
+      "description": "Portfolio or project bento card displayed on the public Link Hub.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "url": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 1000,
+          "pattern": "^https?://.+$"
+        },
+        "displayUrl": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "pinned": {
+          "type": "boolean"
+        },
+        "orderIndex": {
+          "type": "number"
+        },
+        "category": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z0-9\\-]+$"
+        },
+        "previewType": {
+          "type": "string",
+          "enum": ["auto", "chat", "linkhub", "flib", "chess", "image"]
+        },
+        "thumbnailUrl": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "autoThumbnailUrl": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "thumbnailPath": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "galleryUrls": {
+          "type": "array"
+        },
+        "clicks": {
+          "type": "number"
+        },
+        "isPublic": {
+          "type": "boolean"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "url",
+        "displayUrl",
+        "description",
+        "pinned",
+        "orderIndex",
+        "category",
+        "previewType",
+        "clicks",
+        "isPublic",
+        "ownerUid",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AdminIdentity": {
+      "title": "AdminIdentity",
+      "description": "Immutable solo-owner UID and verified email lock record.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 5,
+          "maxLength": 200,
+          "pattern": "^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["owner"]
+        },
+        "lockedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "email", "role", "lockedAt"]
+    },
+    "VisitorMessage": {
+      "title": "VisitorMessage",
+      "description": "Write-only visitor contact or Work With Me inquiry strictly isolated from public reads.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 120
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 5,
+          "maxLength": 200,
+          "pattern": "^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 3000
+        },
+        "source": {
+          "type": "string",
+          "enum": ["hub", "work", "custom"]
+        },
+        "read": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["name", "email", "message", "source", "read", "createdAt"]
+    },
+    "UpdateSubscriber": {
+      "title": "UpdateSubscriber",
+      "description": "Write-only email update subscriber record.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 5,
+          "maxLength": 200,
+          "pattern": "^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["name", "email", "createdAt"]
+    },
+    "AnalyticsEvent": {
+      "title": "AnalyticsEvent",
+      "description": "Bounded outbound click and profile view telemetry stream.",
+      "type": "object",
+      "properties": {
+        "linkId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "linkTitle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "category": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "eventType": {
+          "type": "string",
+          "enum": ["link_click", "profile_view"]
+        },
+        "source": {
+          "type": "string",
+          "enum": ["hub", "pass", "bento"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["linkId", "linkTitle", "category", "eventType", "source", "createdAt"]
+    },
+    "MediaAsset": {
+      "title": "MediaAsset",
+      "description": "Compressed image metadata matching Firebase Storage objects.",
+      "type": "object",
+      "properties": {
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "category": {
+          "type": "string",
+          "enum": ["avatar", "banner", "thumbnail", "gallery"]
+        },
+        "filename": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "storagePath": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "publicUrl": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 2000,
+          "pattern": "^((https?://.+)|(/api/media/[a-zA-Z0-9_\\-]+))$"
+        },
+        "mimeType": {
+          "type": "string",
+          "enum": ["image/webp", "image/jpeg", "image/png"]
+        },
+        "sizeBytes": {
+          "type": "number"
+        },
+        "width": {
+          "type": "number"
+        },
+        "height": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerUid",
+        "category",
+        "filename",
+        "storagePath",
+        "publicUrl",
+        "mimeType",
+        "sizeBytes",
+        "width",
+        "height",
+        "createdAt"
+      ]
+    },
+    "AdminPasskey": {
+      "title": "AdminPasskey",
+      "description": "WebAuthn platform biometric passkey credential (Android Fingerprint, iOS Face ID/Touch ID, Windows Hello) registered by the solo owner.",
+      "type": "object",
+      "properties": {
+        "credentialId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerEmail": {
+          "type": "string",
+          "format": "email",
+          "minLength": 5,
+          "maxLength": 200,
+          "pattern": "^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$"
+        },
+        "deviceLabel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "platform": {
+          "type": "string",
+          "enum": ["android", "ios", "windows", "macos", "other"]
+        },
+        "publicKeySpki": {
+          "type": "string",
+          "minLength": 20,
+          "maxLength": 2000
+        },
+        "algorithm": {
+          "type": "number"
+        },
+        "transports": {
+          "type": "array"
+        },
+        "signCount": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "lastUsedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "credentialId",
+        "ownerUid",
+        "ownerEmail",
+        "deviceLabel",
+        "platform",
+        "publicKeySpki",
+        "algorithm",
+        "transports",
+        "signCount",
+        "createdAt",
+        "lastUsedAt"
+      ]
+    },
+    "PublicMedia": {
+      "title": "PublicMedia",
+      "description": "Compressed image binary payload (<= 650 KB) stored in Cloud Firestore as a resilient fallback when Firebase Storage bucket is unavailable, served via /api/media/{mediaId}.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "category": {
+          "type": "string",
+          "enum": ["avatar", "banner", "thumbnail", "gallery"]
+        },
+        "filename": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "mimeType": {
+          "type": "string",
+          "enum": ["image/webp", "image/jpeg", "image/png"]
+        },
+        "sizeBytes": {
+          "type": "number"
+        },
+        "width": {
+          "type": "number"
+        },
+        "height": {
+          "type": "number"
+        },
+        "dataBase64": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 900000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "category",
+        "filename",
+        "mimeType",
+        "sizeBytes",
+        "width",
+        "height",
+        "dataBase64",
+        "createdAt"
+      ]
+    },
+    "ConnectionTest": {
+      "title": "ConnectionTest",
+      "description": "Health check document at /test/connection.",
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        }
+      },
+      "required": ["ok"]
+    }
+  },
+  "firestore": {
+    "/hub/{docId}": {
+      "schema": { "$ref": "#/entities/HubPublic" },
+      "description": "Public profile, Pantone theme, socials, posts, custom categories, and visibility toggles."
+    },
+    "/links/{linkId}": {
+      "schema": { "$ref": "#/entities/HubLink" },
+      "description": "Portfolio project and product links displayed on the bento grid."
+    },
+    "/admins/{uid}": {
+      "schema": { "$ref": "#/entities/AdminIdentity" },
+      "description": "Verified solo-owner UID registry locked to rajdeep.bhattacharyya25@gmail.com."
+    },
+    "/config/{docId}": {
+      "schema": { "$ref": "#/entities/AdminIdentity" },
+      "description": "Immutable admin UID lock document (/config/adminLock)."
+    },
+    "/adminPasskeys/{credentialId}": {
+      "schema": { "$ref": "#/entities/AdminPasskey" },
+      "description": "Owner-only WebAuthn biometric passkey public keys for Android Fingerprint, iOS Face ID, and Windows Hello."
+    },
+    "/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/VisitorMessage" },
+      "description": "Inbound contact form & Work with me messages (create-only public, read/delete owner only)."
+    },
+    "/subscribers/{subscriberId}": {
+      "schema": { "$ref": "#/entities/UpdateSubscriber" },
+      "description": "Update newsletter subscribers (create-only public, read/delete owner only)."
+    },
+    "/analyticsEvents/{eventId}": {
+      "schema": { "$ref": "#/entities/AnalyticsEvent" },
+      "description": "Outbound link click events powering Admin Analytics charts."
+    },
+    "/mediaAssets/{assetId}": {
+      "schema": { "$ref": "#/entities/MediaAsset" },
+      "description": "Owner-only metadata records for compressed Firebase Storage or Cloud Firestore Media uploads."
+    },
+    "/publicMedia/{mediaId}": {
+      "schema": { "$ref": "#/entities/PublicMedia" },
+      "description": "Non-enumerable compressed image payloads served by /api/media/{mediaId} when Firebase Storage bucket is unavailable."
+    },
+    "/test/{docId}": {
+      "schema": { "$ref": "#/entities/ConnectionTest" },
+      "description": "Read-only connection probe endpoint."
+    }
+  }
+}

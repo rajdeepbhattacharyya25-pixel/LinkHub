@@ -1,0 +1,281 @@
+@import "tailwindcss";
+@import "react-github-calendar/tooltips.css";
+
+:root {
+  --color-espresso: #1A120E;
+  --color-deep-brown: #3A2418;
+  --color-bronze: #6B4A2E;
+  --color-warm-copper: #A88462;
+  --color-champagne: #D5C4AE;
+  --color-charcoal: #4A4A46;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background-color: #463022;
+    color: #1A120E;
+    font-family: 'Manrope', 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    -webkit-tap-highlight-color: rgba(168, 132, 98, 0.22);
+    overflow-x: hidden;
+  }
+
+  a,
+  button,
+  input,
+  select,
+  textarea,
+  label {
+    touch-action: manipulation;
+  }
+
+  code, pre, .font-mono {
+    font-family: 'IBM Plex Mono', 'JetBrains Mono', monospace;
+  }
+
+  .font-manrope {
+    font-family: 'Manrope', -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+
+  .font-ibm-mono {
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  .font-serif-editorial {
+    font-family: 'Fraunces', Georgia, serif;
+  }
+
+  /* High-visibility input, textarea, select & placeholder typography across all views */
+  input,
+  textarea,
+  select {
+    color: #1A120E;
+    font-weight: 500;
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: #5C3D24 !important;
+    opacity: 0.85 !important;
+    font-weight: 500;
+  }
+}
+
+/* Hide scrollbars cleanly for single-row mobile filter & tab strips */
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  -webkit-overflow-scrolling: touch;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Luminous warm bronze, copper & champagne atmospheric backdrop with tactile grain & linen weave */
+.bg-espresso-canvas {
+  position: relative;
+  isolation: isolate;
+  background-color: var(--lh-canvas-bg, #4A3324);
+  background-image:
+    radial-gradient(rgba(213, 196, 174, 0.13) 1px, transparent 1px),
+    repeating-linear-gradient(
+      135deg,
+      rgba(213, 196, 174, 0.028) 0px,
+      rgba(213, 196, 174, 0.028) 1px,
+      transparent 1px,
+      transparent 7px
+    ),
+    repeating-linear-gradient(
+      45deg,
+      rgba(26, 18, 14, 0.05) 0px,
+      rgba(26, 18, 14, 0.05) 1px,
+      transparent 1px,
+      transparent 7px
+    ),
+    radial-gradient(circle at 18% 18%, rgba(255, 255, 255, 0.12) 0%, transparent 48%),
+    radial-gradient(circle at 84% 22%, rgba(255, 255, 255, 0.09) 0%, transparent 50%),
+    radial-gradient(circle at 50% 92%, rgba(0, 0, 0, 0.35) 0%, transparent 65%);
+  background-size:
+    22px 22px,
+    auto,
+    auto,
+    100% 100%,
+    100% 100%,
+    100% 100%;
+  background-attachment: fixed;
+  transition: background-color 240ms ease;
+}
+
+@media (max-width: 767px) {
+  .bg-espresso-canvas {
+    background-attachment: scroll;
+  }
+}
+
+/* Analog suede / fine paper noise grain layer */
+.bg-espresso-canvas::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.28;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 160px 160px;
+}
+
+/* Soft vignette & topographic contour ring depth */
+.bg-espresso-canvas::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image:
+    radial-gradient(circle at 50% 38%, transparent 30%, rgba(16, 12, 10, 0.26) 100%);
+}
+
+/* Fine heavyweight cotton-paper texture for the central champagne card */
+.bg-card-paper {
+  background-color: var(--lh-card-bg, #F4EDE2);
+  background-image:
+    radial-gradient(rgba(107, 74, 46, 0.045) 0.75px, transparent 0.75px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.35) 0%, rgba(255, 255, 255, 0.05) 100%);
+  background-size: 14px 14px, 100% 100%;
+  transition: background-color 240ms ease;
+}
+
+/* Custom react-github-calendar / react-activity-calendar styling for crisp warm ivory card inside toasted highlight section */
+.github-activity-calendar-wrapper .react-activity-calendar {
+  width: 100% !important;
+  max-width: 100% !important;
+  font-family: 'IBM Plex Mono', monospace;
+  color: #4A3324;
+}
+
+.github-activity-calendar-wrapper .react-activity-calendar__scroll-container {
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+  padding-top: 2px;
+  padding-bottom: 2px;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(168, 132, 98, 0.45) transparent;
+}
+
+.github-activity-calendar-wrapper .react-activity-calendar__scroll-container::-webkit-scrollbar {
+  height: 4px;
+}
+
+.github-activity-calendar-wrapper .react-activity-calendar__scroll-container::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.github-activity-calendar-wrapper .react-activity-calendar__scroll-container::-webkit-scrollbar-thumb {
+  background: rgba(168, 132, 98, 0.45);
+  border-radius: 9999px;
+}
+
+.github-activity-calendar-wrapper .react-activity-calendar svg.react-activity-calendar__calendar {
+  display: block;
+  overflow: visible;
+}
+
+.github-activity-calendar-wrapper .react-activity-calendar svg text {
+  font-family: 'IBM Plex Mono', monospace;
+  fill: #4A3324;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.github-activity-calendar-wrapper .react-activity-calendar rect {
+  stroke: rgba(58, 36, 24, 0.14);
+  stroke-width: 1px;
+  transition: stroke 120ms ease, filter 120ms ease;
+}
+
+.github-activity-calendar-wrapper .react-activity-calendar rect:hover {
+  stroke: #1A120E !important;
+  stroke-width: 1.5px;
+  filter: brightness(0.95);
+}
+
+.github-activity-calendar-wrapper .react-activity-calendar__footer {
+  margin-top: 8px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: #4A3324;
+  font-weight: 500;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.github-activity-calendar-wrapper .react-activity-calendar__count {
+  font-family: 'IBM Plex Mono', monospace;
+  font-weight: 600;
+  color: #1A120E;
+}
+
+.github-activity-calendar-wrapper .react-activity-calendar__legend-colors {
+  font-family: 'IBM Plex Mono', monospace;
+  color: #4A3324;
+  font-weight: 500;
+}
+
+/* Interactive tooltip styling matching Warm Espresso & Champagne design system */
+.react-activity-calendar__tooltip {
+  z-index: 60;
+  padding: 6px 10px !important;
+  border-radius: 8px !important;
+  background-color: #1A120E !important;
+  color: #FAF6F0 !important;
+  border: 1px solid #A88462 !important;
+  font-family: 'IBM Plex Mono', monospace !important;
+  font-size: 11px !important;
+  font-weight: 500 !important;
+  letter-spacing: -0.01em;
+  box-shadow: 0 10px 25px -5px rgba(26, 18, 14, 0.45) !important;
+  pointer-events: none;
+}
+
+.react-activity-calendar__tooltip .react-activity-calendar__tooltip-arrow {
+  fill: #1A120E !important;
+}
+
+/* Custom subtle scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #3A2418;
+}
+::-webkit-scrollbar-thumb {
+  background: #A88462;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #D5C4AE;
+}
+
+@keyframes lhSplashSweep {
+  0% {
+    transform: scaleX(0);
+  }
+  100% {
+    transform: scaleX(1);
+  }
+}
+

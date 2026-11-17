@@ -1,0 +1,404 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // PILLAR 0: Global Default-Deny Catch-All Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // GLOBAL SECURITY PRIMITIVES & SOLO-OWNER IDENTITY
+    // =========================================================================
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidPasskeyId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 256 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isBootstrappedOwnerEmail() {
+      return isSignedIn()
+        && request.auth.token.email_verified == true
+        && request.auth.token.email == 'rajdeep.bhattacharyya25@gmail.com';
+    }
+
+    // Dual lock: checks verified owner email AND matches the immutable owner UID lock doc.
+    function isSoloOwner() {
+      return isBootstrappedOwnerEmail() && (
+        !exists(/databases/$(database)/documents/config/adminLock) ||
+        get(/databases/$(database)/documents/config/adminLock).data.email != 'rajdeep.bhattacharyya25@gmail.com' ||
+        get(/databases/$(database)/documents/config/adminLock).data.uid == request.auth.uid
+      );
+    }
+
+    // =========================================================================
+    // ENTITY VALIDATION BLUEPRINTS (Synchronized with firebase-blueprint.json)
+    // =========================================================================
+
+    function isValidHubPublic(data) {
+      return data.keys().hasAll([
+          'ownerUid', 'profile', 'designSystem', 'featuredSong',
+          'socials', 'posts', 'customCategories',
+          'showGithubSection', 'showSongCard', 'showMapCard', 'showContactSection', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerUid', 'profile', 'designSystem', 'featuredSong',
+          'socials', 'posts', 'customCategories',
+          'showGithubSection', 'showSongCard', 'showMapCard', 'showContactSection', 'updatedAt'
+        ])
+        && isValidId(data.ownerUid)
+        && data.ownerUid == request.auth.uid
+        && data.profile is map
+        && data.designSystem is map
+        && data.featuredSong is map
+        && data.socials is list && data.socials.size() <= 20
+        && data.posts is list && data.posts.size() <= 100
+        && data.customCategories is list && data.customCategories.size() <= 30
+        && data.showGithubSection is bool
+        && data.showSongCard is bool
+        && data.showMapCard is bool
+        && data.showContactSection is bool
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidHubLink(data, linkId) {
+      return data.keys().hasAll([
+          'id', 'title', 'url', 'displayUrl', 'description',
+          'pinned', 'orderIndex', 'category', 'previewType',
+          'clicks', 'isPublic', 'ownerUid', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'title', 'url', 'displayUrl', 'description',
+          'pinned', 'orderIndex', 'category', 'previewType',
+          'thumbnailUrl', 'autoThumbnailUrl', 'thumbnailPath', 'galleryUrls',
+          'clicks', 'isPublic', 'ownerUid', 'createdAt', 'updatedAt'
+        ])
+        && data.id == linkId
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 120
+        && data.url is string && data.url.size() >= 8 && data.url.size() <= 1000 && data.url.matches('^https?://.+$')
+        && data.displayUrl is string && data.displayUrl.size() >= 1 && data.displayUrl.size() <= 200
+        && data.description is string && data.description.size() >= 1 && data.description.size() <= 500
+        && data.pinned is bool
+        && data.orderIndex is number
+        && data.category is string && data.category.size() >= 1 && data.category.size() <= 64 && data.category.matches('^[a-z0-9\\-]+$')
+        && data.previewType in ['auto', 'chat', 'linkhub', 'flib', 'chess', 'image']
+        && (!('thumbnailUrl' in data) || (data.thumbnailUrl is string && data.thumbnailUrl.size() <= 2000))
+        && (!('autoThumbnailUrl' in data) || (data.autoThumbnailUrl is string && data.autoThumbnailUrl.size() <= 2000))
+        && (!('thumbnailPath' in data) || (data.thumbnailPath is string && data.thumbnailPath.size() <= 300))
+        && (!('galleryUrls' in data) || (data.galleryUrls is list && data.galleryUrls.size() <= 10))
+        && data.clicks is number && data.clicks >= 0
+        && data.isPublic is bool
+        && isValidId(data.ownerUid)
+        && data.ownerUid == request.auth.uid
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdminIdentity(data, expectedUid) {
+      return data.keys().hasAll(['uid', 'email', 'role', 'lockedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'role', 'lockedAt'])
+        && isValidId(data.uid)
+        && data.uid == expectedUid
+        && data.email is string && data.email == 'rajdeep.bhattacharyya25@gmail.com'
+        && data.role == 'owner'
+        && data.lockedAt is timestamp;
+    }
+
+    function isValidAdminPasskey(data, expectedCredentialId) {
+      return data.keys().hasAll([
+          'credentialId', 'ownerUid', 'ownerEmail', 'deviceLabel',
+          'platform', 'publicKeySpki', 'algorithm', 'transports',
+          'signCount', 'createdAt', 'lastUsedAt'
+        ])
+        && data.keys().hasOnly([
+          'credentialId', 'ownerUid', 'ownerEmail', 'deviceLabel',
+          'platform', 'publicKeySpki', 'algorithm', 'transports',
+          'signCount', 'createdAt', 'lastUsedAt'
+        ])
+        && isValidPasskeyId(data.credentialId)
+        && data.credentialId == expectedCredentialId
+        && isValidId(data.ownerUid)
+        && data.ownerUid == request.auth.uid
+        && data.ownerEmail is string && data.ownerEmail.size() >= 5 && data.ownerEmail.size() <= 200 && data.ownerEmail == 'rajdeep.bhattacharyya25@gmail.com'
+        && data.deviceLabel is string && data.deviceLabel.size() >= 1 && data.deviceLabel.size() <= 120
+        && data.platform in ['android', 'ios', 'windows', 'macos', 'other']
+        && data.publicKeySpki is string && data.publicKeySpki.size() >= 20 && data.publicKeySpki.size() <= 2000
+        && data.algorithm in [-7, -257]
+        && data.transports is list && data.transports.size() <= 6 && (data.transports.size() == 0 || data.transports[0] is string)
+        && data.signCount is number && data.signCount >= 0
+        && data.createdAt is timestamp
+        && data.lastUsedAt is timestamp;
+    }
+
+    function isValidVisitorMessage(data) {
+      return data.keys().hasAll(['name', 'email', 'message', 'source', 'read', 'createdAt'])
+        && data.keys().hasOnly(['name', 'email', 'message', 'source', 'read', 'createdAt'])
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 120
+        && data.email is string && data.email.size() >= 5 && data.email.size() <= 200 && data.email.matches('^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$')
+        && data.message is string && data.message.size() >= 5 && data.message.size() <= 3000
+        && data.source in ['hub', 'work', 'custom']
+        && data.read is bool
+        && data.createdAt is timestamp;
+    }
+
+    function isValidUpdateSubscriber(data) {
+      return data.keys().hasAll(['name', 'email', 'createdAt'])
+        && data.keys().hasOnly(['name', 'email', 'createdAt'])
+        && data.name is string && data.name.size() <= 120
+        && data.email is string && data.email.size() >= 5 && data.email.size() <= 200 && data.email.matches('^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$')
+        && data.createdAt is timestamp;
+    }
+
+    function isValidAnalyticsEvent(data) {
+      return data.keys().hasAll(['linkId', 'linkTitle', 'category', 'eventType', 'source', 'createdAt'])
+        && data.keys().hasOnly(['linkId', 'linkTitle', 'category', 'eventType', 'source', 'createdAt'])
+        && isValidId(data.linkId)
+        && data.linkTitle is string && data.linkTitle.size() >= 1 && data.linkTitle.size() <= 120
+        && data.category is string && data.category.size() >= 1 && data.category.size() <= 64
+        && data.eventType in ['link_click', 'profile_view']
+        && data.source in ['hub', 'pass', 'bento']
+        && data.createdAt is timestamp;
+    }
+
+    function isValidMediaAsset(data) {
+      return data.keys().hasAll([
+          'ownerUid', 'category', 'filename', 'storagePath',
+          'publicUrl', 'mimeType', 'sizeBytes', 'width', 'height', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerUid', 'category', 'filename', 'storagePath',
+          'publicUrl', 'mimeType', 'sizeBytes', 'width', 'height', 'createdAt'
+        ])
+        && isValidId(data.ownerUid)
+        && data.ownerUid == request.auth.uid
+        && data.category in ['avatar', 'banner', 'thumbnail', 'gallery']
+        && data.filename is string && data.filename.size() >= 1 && data.filename.size() <= 160
+        && data.storagePath is string && data.storagePath.size() >= 1 && data.storagePath.size() <= 300
+        && data.publicUrl is string && data.publicUrl.size() >= 8 && data.publicUrl.size() <= 2000 && data.publicUrl.matches('^((https?://.+)|(/api/media/[a-zA-Z0-9_\\-]+))$')
+        && data.mimeType in ['image/webp', 'image/jpeg', 'image/png']
+        && data.sizeBytes is number && data.sizeBytes > 0 && data.sizeBytes <= 2097152
+        && data.width is number && data.width > 0 && data.width <= 4096
+        && data.height is number && data.height > 0 && data.height <= 4096
+        && data.createdAt is timestamp;
+    }
+
+    function isValidPublicMedia(data, mediaId) {
+      return data.keys().hasAll([
+          'id', 'ownerUid', 'category', 'filename', 'mimeType',
+          'sizeBytes', 'width', 'height', 'dataBase64', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerUid', 'category', 'filename', 'mimeType',
+          'sizeBytes', 'width', 'height', 'dataBase64', 'createdAt'
+        ])
+        && isValidId(data.id)
+        && data.id == mediaId
+        && isValidId(data.ownerUid)
+        && data.ownerUid == request.auth.uid
+        && data.category in ['avatar', 'banner', 'thumbnail', 'gallery']
+        && data.filename is string && data.filename.size() >= 1 && data.filename.size() <= 160
+        && data.mimeType in ['image/webp', 'image/jpeg', 'image/png']
+        && data.sizeBytes is number && data.sizeBytes > 0 && data.sizeBytes <= 650000
+        && data.width is number && data.width > 0 && data.width <= 4096
+        && data.height is number && data.height > 0 && data.height <= 4096
+        && data.dataBase64 is string && data.dataBase64.size() >= 8 && data.dataBase64.size() <= 900000
+        && data.createdAt is timestamp;
+    }
+
+    // =========================================================================
+    // COLLECTION MATCH BLOCKS
+    // =========================================================================
+
+    // 1. Public Showcase Configuration (/hub/public)
+    match /hub/{docId} {
+      allow get: if docId == 'public';
+      allow list: if false;
+      allow create: if isSoloOwner()
+        && docId == 'public'
+        && isValidHubPublic(incoming())
+        && incoming().updatedAt == request.time;
+      allow update: if isSoloOwner()
+        && docId == 'public'
+        && isValidHubPublic(incoming())
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'profile', 'designSystem', 'featuredSong', 'socials', 'posts', 'customCategories',
+          'showGithubSection', 'showSongCard', 'showMapCard', 'showContactSection', 'updatedAt'
+        ]);
+      allow delete: if false;
+    }
+
+    // 2. Public Portfolio Links (/links/{linkId})
+    match /links/{linkId} {
+      allow get: if isValidId(linkId) && (resource == null || existing().isPublic == true || isSoloOwner());
+      allow list: if resource.data.isPublic == true || isBootstrappedOwnerEmail();
+      allow create: if isSoloOwner()
+        && isValidId(linkId)
+        && isValidHubLink(incoming(), linkId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isSoloOwner()
+        && isValidId(linkId)
+        && isValidHubLink(incoming(), linkId)
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'title', 'url', 'displayUrl', 'description', 'pinned', 'orderIndex',
+          'category', 'previewType', 'thumbnailUrl', 'autoThumbnailUrl', 'thumbnailPath', 'galleryUrls',
+          'clicks', 'isPublic', 'updatedAt'
+        ]);
+      allow delete: if isSoloOwner() && isValidId(linkId);
+    }
+
+    // 3. Immutable Owner Lock (/config/adminLock)
+    match /config/{docId} {
+      allow get: if isBootstrappedOwnerEmail() && docId == 'adminLock';
+      allow list: if false;
+      allow create: if isBootstrappedOwnerEmail()
+        && docId == 'adminLock'
+        && !exists(/databases/$(database)/documents/config/adminLock)
+        && isValidAdminIdentity(incoming(), request.auth.uid)
+        && incoming().lockedAt == request.time;
+      allow update: if isBootstrappedOwnerEmail()
+        && docId == 'adminLock'
+        && existing().email != 'rajdeep.bhattacharyya25@gmail.com'
+        && isValidAdminIdentity(incoming(), request.auth.uid)
+        && incoming().lockedAt == request.time;
+      allow delete: if false;
+    }
+
+    // 4. Solo Admin Registry (/admins/{uid})
+    match /admins/{uid} {
+      allow get: if isSoloOwner() && isValidId(uid) && uid == request.auth.uid;
+      allow list: if false;
+      allow create: if isSoloOwner()
+        && isValidId(uid)
+        && uid == request.auth.uid
+        && !exists(/databases/$(database)/documents/admins/$(uid))
+        && isValidAdminIdentity(incoming(), uid)
+        && incoming().lockedAt == request.time;
+      allow update, delete: if false;
+    }
+
+    // 5. Write-Only Visitor Messages (/messages/{messageId}) — Admin-Only Read/Manage
+    match /messages/{messageId} {
+      allow get: if isSoloOwner() && isValidId(messageId);
+      allow list: if isBootstrappedOwnerEmail();
+      allow create: if isValidId(messageId)
+        && isValidVisitorMessage(incoming())
+        && incoming().read == false
+        && incoming().createdAt == request.time;
+      allow update: if isSoloOwner()
+        && isValidId(messageId)
+        && isValidVisitorMessage(incoming())
+        && incoming().name == existing().name
+        && incoming().email == existing().email
+        && incoming().message == existing().message
+        && incoming().source == existing().source
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['read']);
+      allow delete: if isSoloOwner() && isValidId(messageId);
+    }
+
+    // 6. Write-Only Update Subscribers (/subscribers/{subscriberId}) — Admin-Only Read/Delete
+    match /subscribers/{subscriberId} {
+      allow get: if isSoloOwner() && isValidId(subscriberId);
+      allow list: if isBootstrappedOwnerEmail();
+      allow create: if isValidId(subscriberId)
+        && isValidUpdateSubscriber(incoming())
+        && incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isSoloOwner() && isValidId(subscriberId);
+    }
+
+    // 7. Outbound Link Click Telemetry (/analyticsEvents/{eventId})
+    match /analyticsEvents/{eventId} {
+      allow get: if isSoloOwner() && isValidId(eventId);
+      allow list: if isBootstrappedOwnerEmail();
+      allow create: if isValidId(eventId)
+        && isValidAnalyticsEvent(incoming())
+        && incoming().createdAt == request.time
+        && (
+          incoming().eventType == 'profile_view' ||
+          exists(/databases/$(database)/documents/links/$(incoming().linkId))
+        );
+      allow update: if false;
+      allow delete: if isSoloOwner() && isValidId(eventId);
+    }
+
+    // 8. Owner Media Asset Registry (/mediaAssets/{assetId})
+    match /mediaAssets/{assetId} {
+      allow get: if isSoloOwner() && isValidId(assetId);
+      allow list: if isBootstrappedOwnerEmail() && resource.data.ownerUid == request.auth.uid;
+      allow create: if isSoloOwner()
+        && isValidId(assetId)
+        && isValidMediaAsset(incoming())
+        && incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isSoloOwner() && isValidId(assetId);
+    }
+
+    // 8b. Non-Enumerable Public Media Binary Fallback (/publicMedia/{mediaId})
+    match /publicMedia/{mediaId} {
+      allow get: if isValidId(mediaId);
+      allow list: if false;
+      allow create: if isSoloOwner()
+        && isValidId(mediaId)
+        && isValidPublicMedia(incoming(), mediaId)
+        && incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isSoloOwner() && isValidId(mediaId);
+    }
+
+    // 9. Owner Biometric Passkey Registry (/adminPasskeys/{credentialId})
+    match /adminPasskeys/{credentialId} {
+      allow get: if isSoloOwner() && isValidPasskeyId(credentialId);
+      allow list: if isBootstrappedOwnerEmail() && resource.data.ownerUid == request.auth.uid;
+      allow create: if isSoloOwner()
+        && isValidPasskeyId(credentialId)
+        && isValidAdminPasskey(incoming(), credentialId)
+        && incoming().createdAt == request.time
+        && incoming().lastUsedAt == request.time;
+      allow update: if isSoloOwner()
+        && isValidPasskeyId(credentialId)
+        && isValidAdminPasskey(incoming(), credentialId)
+        && incoming().credentialId == existing().credentialId
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().ownerEmail == existing().ownerEmail
+        && incoming().platform == existing().platform
+        && incoming().publicKeySpki == existing().publicKeySpki
+        && incoming().algorithm == existing().algorithm
+        && incoming().transports == existing().transports
+        && incoming().createdAt == existing().createdAt
+        && incoming().signCount >= existing().signCount
+        && incoming().lastUsedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['signCount', 'lastUsedAt', 'deviceLabel']);
+      allow delete: if isSoloOwner() && isValidPasskeyId(credentialId);
+    }
+
+    // 10. Health Check Probe (/test/connection)
+    match /test/{docId} {
+      allow get: if docId == 'connection';
+      allow list, write: if false;
+    }
+  }
+}

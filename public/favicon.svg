@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="RajdeepBhattacharyya-LinkHub Logo">
+  <defs>
+    <linearGradient id="espressoBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#3A2418" />
+      <stop offset="55%" stop-color="#281810" />
+      <stop offset="100%" stop-color="#1A120E" />
+    </linearGradient>
+    <linearGradient id="copperGold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#DFC3A4" />
+      <stop offset="45%" stop-color="#B88E65" />
+      <stop offset="100%" stop-color="#7A5333" />
+    </linearGradient>
+    <linearGradient id="ivoryLink" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#FAF6F0" />
+      <stop offset="100%" stop-color="#E6D8C5" />
+    </linearGradient>
+  </defs>
+
+  <!-- Outer Rounded Studio Frame -->
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#espressoBg)" stroke="#A88462" stroke-width="5" />
+  <rect x="20" y="20" width="216" height="216" rx="44" fill="none" stroke="#D5C4AE" stroke-opacity="0.28" stroke-width="2" />
+
+  <!-- Intertwined RB Monogram in Brushed Warm Copper -->
+  <g fill="none" stroke="url(#copperGold)" stroke-width="16" stroke-linecap="round" stroke-linejoin="round">
+    <!-- R Vertical & Bowl + Leg -->
+    <path d="M82 68 V188" />
+    <path d="M82 68 H120 C140 68 152 80 152 97 C152 114 140 126 120 126 H82" />
+    <path d="M114 126 L150 188" />
+
+    <!-- B Spine & Double Bowls -->
+    <path d="M138 68 H162 C180 68 192 79 192 95 C192 109 182 119 168 123 C185 127 196 139 196 157 C196 175 182 188 160 188 H134" />
+  </g>
+
+  <!-- Interlocking Chain-Link Infinity Loop in Champagne Ivory -->
+  <path
+    d="M52 128 C52 106 68 92 90 92 H116 C132 92 142 104 148 128 C154 152 164 164 180 164 H186 C202 164 212 150 212 128 C212 106 200 94 182 94"
+    fill="none"
+    stroke="#1A120E"
+    stroke-width="20"
+    stroke-linecap="round"
+  />
+  <path
+    d="M52 128 C52 106 68 92 90 92 H116 C132 92 142 104 148 128 C154 152 164 164 180 164 H186 C202 164 212 150 212 128 C212 106 200 94 182 94"
+    fill="none"
+    stroke="url(#ivoryLink)"
+    stroke-width="11"
+    stroke-linecap="round"
+  />
+
+  <!-- Top Overpass of R Stem for Authentic Interlace -->
+  <path
+    d="M82 76 V112"
+    fill="none"
+    stroke="url(#copperGold)"
+    stroke-width="16"
+    stroke-linecap="round"
+  />
+</svg>

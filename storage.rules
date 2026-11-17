@@ -1,0 +1,27 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+
+    match /hub-media/{ownerUid}/{category}/{fileName} {
+      allow get: if true;
+      allow create, update: if request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email == 'rajdeep.bhattacharyya25@gmail.com'
+        && request.auth.uid == ownerUid
+        && category in ['avatar', 'banner', 'thumbnail', 'gallery']
+        && request.resource != null
+        && request.resource.size > 0
+        && request.resource.size <= 2 * 1024 * 1024
+        && request.resource.contentType.matches('image/(webp|jpeg|png)');
+      allow delete: if request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email == 'rajdeep.bhattacharyya25@gmail.com'
+        && request.auth.uid == ownerUid
+        && category in ['avatar', 'banner', 'thumbnail', 'gallery'];
+    }
+  }
+}
