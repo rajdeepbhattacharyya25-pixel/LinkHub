@@ -8,14 +8,35 @@ import {
   logEvent,
   type Analytics,
 } from 'firebase/analytics';
-import firebaseConfig from '../../firebase-applet-config.json';
+import firebaseConfigFile from '../../firebase-applet-config.json';
 
-export const OWNER_ADMIN_EMAIL = 'rajdeep.bhattacharyya25@gmail.com';
+const clientEnv: Record<string, string | undefined> =
+  typeof import.meta !== 'undefined' &&
+  import.meta &&
+  typeof (import.meta as { env?: Record<string, string | undefined> }).env === 'object'
+    ? (import.meta as { env: Record<string, string | undefined> }).env
+    : {};
 
-const app = initializeApp(firebaseConfig);
+const resolvedFirebaseConfig = {
+  projectId: clientEnv.VITE_FIREBASE_PROJECT_ID || firebaseConfigFile.projectId,
+  appId: clientEnv.VITE_FIREBASE_APP_ID || firebaseConfigFile.appId,
+  apiKey: clientEnv.VITE_FIREBASE_API_KEY || firebaseConfigFile.apiKey,
+  authDomain: clientEnv.VITE_FIREBASE_AUTH_DOMAIN || firebaseConfigFile.authDomain,
+  firestoreDatabaseId:
+    clientEnv.VITE_FIREBASE_FIRESTORE_DATABASE_ID || firebaseConfigFile.firestoreDatabaseId,
+  storageBucket: clientEnv.VITE_FIREBASE_STORAGE_BUCKET || firebaseConfigFile.storageBucket,
+  messagingSenderId:
+    clientEnv.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseConfigFile.messagingSenderId,
+  measurementId: clientEnv.VITE_FIREBASE_MEASUREMENT_ID || firebaseConfigFile.measurementId || '',
+};
+
+export const OWNER_ADMIN_EMAIL =
+  (clientEnv.VITE_OWNER_ADMIN_EMAIL || '').trim() || 'rajdeep.bhattacharyya25@gmail.com';
+
+const app = initializeApp(resolvedFirebaseConfig);
 
 // CRITICAL: Pass explicit provisioned firestoreDatabaseId so Firestore connects to the named database
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+export const db = getFirestore(app, resolvedFirebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 export const storage = getStorage(app);
 // Fail fast instead of stalling the crop/upload modal for the 10-minute SDK default
@@ -33,7 +54,7 @@ export async function initFirebaseAnalytics(): Promise<Analytics | null> {
   if (analyticsInitStarted) return analyticsInstance;
   analyticsInitStarted = true;
 
-  if (typeof window === 'undefined' || !firebaseConfig.measurementId) {
+  if (typeof window === 'undefined' || !resolvedFirebaseConfig.measurementId) {
     return null;
   }
 
@@ -188,8 +209,8 @@ export function evaluateAdminAccessGuard(input: {
 }
 
 export const FIREBASE_RUNTIME_INFO = {
-  projectId: firebaseConfig.projectId,
-  firestoreDatabaseId: firebaseConfig.firestoreDatabaseId,
-  storageBucket: firebaseConfig.storageBucket,
-  analyticsConfigured: Boolean(firebaseConfig.measurementId),
+  projectId: resolvedFirebaseConfig.projectId,
+  firestoreDatabaseId: resolvedFirebaseConfig.firestoreDatabaseId,
+  storageBucket: resolvedFirebaseConfig.storageBucket,
+  analyticsConfigured: Boolean(resolvedFirebaseConfig.measurementId),
 };

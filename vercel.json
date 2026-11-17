@@ -1,0 +1,16 @@
+{
+  "rewrites": [
+    {
+      "source": "/RajdeepBhattacharyya-LinkHub",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/rajdeepbhattacharyya-linkhub",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/admin",
+      "destination": "/index.html"
+    }
+  ]
+}

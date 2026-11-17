@@ -27,7 +27,6 @@ import {
   DEFAULT_FAVICON_SVG_PATH,
   DEFAULT_OG_LOGO_PATH,
   DEFAULT_PUBLIC_URL_PATH,
-  DEFAULT_PUBLIC_URL_SLUG,
   buildLandingSeoMetadata,
   buildStructuredDataJsonLd,
 } from './utils/seoAndGeo';
@@ -67,7 +66,7 @@ import {
   setBiometricLockPreferred,
   type AdminPasskeyRecord,
 } from './utils/biometricAuth';
-import { BrandIcon, VerifiedBadge, BuilderBadge, WebsiteBrandLogo } from './components/SocialIcons';
+import { BrandIcon, VerifiedBadge, BuilderBadge } from './components/SocialIcons';
 import { GitHubActivity } from './components/GitHubActivity';
 import { LinkBentoSection } from './components/LinkBentoSection';
 import { PassView } from './components/PassView';
@@ -537,20 +536,9 @@ function AppContent() {
           </span>
         </div>
       )}
-      {/* DESKTOP TOP-LEFT BRAND LOGO & TOP-RIGHT ACTION BAR ANCHORED TO TOP */}
+      {/* DESKTOP TOP-RIGHT ACTION BAR ANCHORED TO TOP (hidden on mobile in favor of bottom thumb dock & on Admin/Pass views) */}
       {activeRoute !== 'pass' && activeRoute !== 'admin' && (
         <>
-          <div className="hidden sm:flex absolute top-4 left-4 z-30 items-center">
-            <button
-              type="button"
-              onClick={() => setActiveRoute('hub')}
-              className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#FAF6F0] text-[#1A120E] hover:bg-[#D5C4AE] border border-[#D5C4AE] text-xs font-bold shadow-md transition-all cursor-pointer"
-            >
-              <WebsiteBrandLogo className="w-5 h-5 shrink-0" />
-              <span className="font-ibm-mono">{DEFAULT_PUBLIC_URL_SLUG}</span>
-            </button>
-          </div>
-
           <nav
             aria-label="Page actions"
             className="hidden sm:flex absolute top-4 right-4 z-30 flex-wrap items-center justify-end gap-2"
@@ -617,16 +605,19 @@ function AppContent() {
             <button
               type="button"
               onClick={() => setActiveRoute('hub')}
-              className="inline-flex items-center gap-2 px-3 py-1.5 min-h-[40px] rounded-full border shadow-sm text-xs font-bold cursor-pointer max-w-[215px]"
+              className="inline-flex items-center gap-2 px-3 py-1.5 min-h-[40px] rounded-full border shadow-sm text-xs font-bold cursor-pointer"
               style={{
                 backgroundColor: designSystem.cardBg,
                 borderColor: designSystem.borderColor,
                 color: designSystem.primaryText,
               }}
             >
-              <WebsiteBrandLogo className="w-4 h-4 shrink-0" />
-              <span className="font-ibm-mono truncate">
-                {profile.handle.trim() || profile.name.trim() || DEFAULT_PUBLIC_URL_SLUG}
+              <span
+                className="w-2 h-2 rounded-full shrink-0"
+                style={{ backgroundColor: designSystem.accentPrimary }}
+              />
+              <span className="font-ibm-mono">
+                {profile.handle.trim() || profile.name.trim() || 'Link Hub'}
               </span>
             </button>
 

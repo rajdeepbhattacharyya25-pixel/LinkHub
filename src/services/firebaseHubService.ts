@@ -98,10 +98,34 @@ export function sanitizeHttpUrl(raw: string, fallback = 'https://example.com'): 
   return withProto.slice(0, 1000) || fallback;
 }
 
+const resolvedClientMediaCache = new Map<string, string>();
+const dataUriToMediaPathMap = new Map<string, string>();
+const inFlightClientMediaFetches = new Set<string>();
+
+function restoreCanonicalMediaUrl(rawUrl?: string, storagePath?: string): string {
+  const clean = (rawUrl || '').trim();
+  if (!clean) return '';
+  const mapped = dataUriToMediaPathMap.get(clean);
+  if (mapped) return mapped;
+  if (clean.startsWith('data:image/') && storagePath) {
+    const mediaId = extractFirestoreMediaId(storagePath);
+    if (mediaId) return `/api/media/${mediaId}`;
+  }
+  return clean;
+}
+
 export function sanitizeHubPublicData(config: SiteConfigState, ownerUid: string) {
+  const sanitizedProfile = {
+    ...config.profile,
+    avatarUrl: restoreCanonicalMediaUrl(config.profile.avatarUrl, config.profile.avatarPath),
+    bannerImageUrl: restoreCanonicalMediaUrl(
+      config.profile.bannerImageUrl,
+      config.profile.bannerImagePath
+    ),
+  };
   return {
     ownerUid: sanitizeFirestoreId(ownerUid, 'owner'),
-    profile: config.profile,
+    profile: sanitizedProfile,
     designSystem: config.designSystem,
     featuredSong: config.featuredSong,
     socials: (config.socials || []).slice(0, 20),
@@ -130,6 +154,7 @@ export function sanitizeLinkPayload(
     'external-link';
   const cleanCategory = normalizeCategoryId(link.category) || 'project';
   const previewType = normalizeLinkPreviewType(link.previewType, 'chat');
+  const restoredThumb = restoreCanonicalMediaUrl(link.thumbnailUrl, link.thumbnailPath);
 
   return {
     id: safeId,
@@ -143,7 +168,7 @@ export function sanitizeLinkPayload(
     orderIndex: Number.isFinite(index) ? index : 0,
     category: cleanCategory.slice(0, 64),
     previewType,
-    thumbnailUrl: (link.thumbnailUrl || '').trim().slice(0, 2000),
+    thumbnailUrl: restoredThumb.slice(0, 2000),
     autoThumbnailUrl: (link.autoThumbnailUrl || '').trim().slice(0, 2000),
     thumbnailPath: (link.thumbnailPath || '').trim().slice(0, 300),
     galleryUrls: Array.isArray(link.galleryUrls)
@@ -267,6 +292,44 @@ export async function verifyAndLockSoloOwner(
  * 2. PUBLIC HUB & LINKS REAL-TIME SUBSCRIPTION
  * ========================================================================== */
 
+function resolveMediaUrlFromCache(rawUrl?: string): string {
+  const clean = (rawUrl || '').trim();
+  if (!clean.startsWith('/api/media/')) return clean;
+  return resolvedClientMediaCache.get(clean) || clean;
+}
+
+async function hydrateFirestoreMediaUrl(
+  rawUrl: string | undefined,
+  onResolved: () => void
+): Promise<void> {
+  const clean = (rawUrl || '').trim();
+  if (!clean.startsWith('/api/media/')) return;
+  if (resolvedClientMediaCache.has(clean) || inFlightClientMediaFetches.has(clean)) return;
+
+  const mediaId = clean.replace(/^\/api\/media\//, '').split(/[?#]/)[0].trim();
+  if (!mediaId) return;
+
+  inFlightClientMediaFetches.add(clean);
+  try {
+    const snap = await getDoc(doc(db, 'publicMedia', mediaId));
+    if (snap.exists()) {
+      const data = snap.data();
+      const mimeType = typeof data.mimeType === 'string' ? data.mimeType.trim() : 'image/webp';
+      const dataBase64 = typeof data.dataBase64 === 'string' ? data.dataBase64.trim() : '';
+      if (dataBase64) {
+        const dataUri = `data:${mimeType};base64,${dataBase64}`;
+        resolvedClientMediaCache.set(clean, dataUri);
+        dataUriToMediaPathMap.set(dataUri, clean);
+        onResolved();
+      }
+    }
+  } catch {
+    // Fallback to /api/media/:mediaId route when available
+  } finally {
+    inFlightClientMediaFetches.delete(clean);
+  }
+}
+
 export function subscribePublicHubAndLinks(callbacks: {
   onConfigUpdate: (
     next: SiteConfigState,
@@ -292,10 +355,29 @@ export function subscribePublicHubAndLinks(callbacks: {
           ? latestLinks.filter((lnk) => !LEGACY_DEMO_LINK_IDS.has(lnk.id))
           : latestLinks
         : base.links;
+
+    // Trigger background Firestore hydration for any /api/media/:id URLs (ensures Vercel static compatibility)
+    void hydrateFirestoreMediaUrl(base.profile.avatarUrl, emitCombined);
+    void hydrateFirestoreMediaUrl(base.profile.bannerImageUrl, emitCombined);
+    for (const lnk of linksToUse) {
+      void hydrateFirestoreMediaUrl(lnk.thumbnailUrl, emitCombined);
+    }
+
+    const hydratedProfile = {
+      ...base.profile,
+      avatarUrl: resolveMediaUrlFromCache(base.profile.avatarUrl),
+      bannerImageUrl: resolveMediaUrlFromCache(base.profile.bannerImageUrl),
+    };
+    const hydratedLinks = linksToUse.map((lnk) => ({
+      ...lnk,
+      thumbnailUrl: resolveMediaUrlFromCache(lnk.thumbnailUrl),
+    }));
+
     callbacks.onConfigUpdate(
       {
         ...base,
-        links: linksToUse,
+        profile: hydratedProfile,
+        links: hydratedLinks,
       },
       {
         cloudSeeded: effectiveHubSeeded,
@@ -736,7 +818,11 @@ export async function uploadCompressedMediaToFirebaseStorage(params: {
     }
 
     finalStoragePath = `firestore-media/${cleanOwner}/${category}/${mediaId}`;
-    finalPublicUrl = `/api/media/${mediaId}`;
+    const canonicalMediaPath = `/api/media/${mediaId}`;
+    const dataUri = `data:${finalMimeType};base64,${dataBase64}`;
+    resolvedClientMediaCache.set(canonicalMediaPath, dataUri);
+    dataUriToMediaPathMap.set(dataUri, canonicalMediaPath);
+    finalPublicUrl = canonicalMediaPath;
   }
 
   throwIfAborted(signal);
