@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import {
   Briefcase,
   Bell,
@@ -29,6 +29,7 @@ import {
   DEFAULT_PUBLIC_URL_PATH,
   buildLandingSeoMetadata,
   buildStructuredDataJsonLd,
+  serializeJsonLdSafe,
 } from './utils/seoAndGeo';
 import {
   validateContactSubmission,
@@ -69,10 +70,15 @@ import {
 import { BrandIcon, VerifiedBadge, BuilderBadge } from './components/SocialIcons';
 import { GitHubActivity } from './components/GitHubActivity';
 import { LinkBentoSection } from './components/LinkBentoSection';
-import { PassView } from './components/PassView';
-import { AdminPage } from './components/AdminPage';
 import { AdminAuthGate } from './components/AdminAuthGate';
 import { ErrorBoundary } from './components/ErrorBoundary';
+
+const PassView = lazy(() =>
+  import('./components/PassView').then((m) => ({ default: m.PassView }))
+);
+const AdminPage = lazy(() =>
+  import('./components/AdminPage').then((m) => ({ default: m.AdminPage }))
+);
 import { PortraitLoadingScreen } from './components/PortraitLoadingScreen';
 import {
   DEFAULT_LOADING_SCREEN_DURATION_MS,
@@ -125,7 +131,22 @@ function getRouteFromLocation(): ActiveRoute {
   );
 }
 
+function safeHttpHref(raw?: string | null): string | undefined {
+  const trimmed = (raw || '').trim();
+  if (!trimmed) return undefined;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return parsed.toString();
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
 function isLocalhostTestAdmin(): boolean {
+  if (!import.meta.env.DEV) return false;
   if (typeof window === 'undefined') return false;
   const host = window.location.hostname;
   if (host !== 'localhost' && host !== '127.0.0.1') return false;
@@ -234,6 +255,7 @@ function AppContent() {
     upsertMeta('name', 'keywords', meta.keywords.join(', '));
     upsertMeta('name', 'author', meta.authorName);
     upsertMeta('name', 'robots', meta.robots);
+    upsertMeta('name', 'googlebot', meta.robots);
     upsertMeta('property', 'og:type', meta.ogType);
     upsertMeta('property', 'og:site_name', meta.siteName);
     upsertMeta('property', 'og:title', meta.title);
@@ -281,7 +303,7 @@ function AppContent() {
       ldScript.type = 'application/ld+json';
       document.head.appendChild(ldScript);
     }
-    ldScript.textContent = JSON.stringify(jsonLd);
+    ldScript.textContent = serializeJsonLdSafe(jsonLd);
   }, [siteConfig, activeRoute]);
 
   // Track real session-deduped profile view telemetry
@@ -326,16 +348,13 @@ function AppContent() {
     };
   }, []);
 
-  // Strict Solo Owner Google Auth + UID Lock listener
+  // Strict Solo Owner Google Auth + UID Lock listener (with sequence counter to prevent async sign-out races)
   useEffect(() => {
-    let unsubAdminData: (() => void) | null = null;
+    let authSeq = 0;
     let unsubPasskeys: (() => void) | null = null;
 
     const unsubAuth = onAuthStateChanged(auth, async (firebaseUser) => {
-      if (unsubAdminData) {
-        unsubAdminData();
-        unsubAdminData = null;
-      }
+      const mySeq = ++authSeq;
       if (unsubPasskeys) {
         unsubPasskeys();
         unsubPasskeys = null;
@@ -362,14 +381,10 @@ function AppContent() {
       setAuthLoading(true);
       try {
         const { evaluation } = await verifyAndLockSoloOwner(firebaseUser);
+        if (mySeq !== authSeq) return;
         setGuardEvaluation(evaluation);
 
         if (evaluation.authorized) {
-          unsubAdminData = subscribeAdminInboxAndTelemetry({
-            onMessages: setMessages,
-            onSubscribers: setSubscribers,
-            onAnalyticsEvents: setAnalyticsEvents,
-          });
           unsubPasskeys = subscribeAdminPasskeys(firebaseUser.uid, setPasskeys);
         } else {
           setMessages([]);
@@ -378,26 +393,51 @@ function AppContent() {
           setPasskeys([]);
           setBiometricUnlocked(false);
         }
-      } catch (err) {
+      } catch {
+        if (mySeq !== authSeq) return;
         setGuardEvaluation({
           authorized: false,
           status: 'uid_lock_mismatch',
-          reason:
-            err instanceof Error
-              ? err.message
-              : 'Unable to verify solo owner lock against Firestore.',
+          reason: 'Unable to verify solo owner lock against Firestore.',
         });
       } finally {
-        setAuthLoading(false);
+        if (mySeq === authSeq) {
+          setAuthLoading(false);
+        }
       }
     });
 
     return () => {
+      authSeq += 1;
       unsubAuth();
-      if (unsubAdminData) unsubAdminData();
       if (unsubPasskeys) unsubPasskeys();
     };
   }, []);
+
+  const biometricLockRequired =
+    guardEvaluation.authorized &&
+    biometricLockEnabled &&
+    !biometricUnlocked &&
+    (passkeys.length > 0 ||
+      loadPairedDevicePasskeys(OWNER_ADMIN_EMAIL).length > 0);
+
+  // Subscribe to private admin inbox & telemetry ONLY after full auth + biometric unlock
+  useEffect(() => {
+    if (!currentUser || !guardEvaluation.authorized || biometricLockRequired) {
+      setMessages([]);
+      setSubscribers([]);
+      setAnalyticsEvents([]);
+      return;
+    }
+    const unsubAdminData = subscribeAdminInboxAndTelemetry({
+      onMessages: setMessages,
+      onSubscribers: setSubscribers,
+      onAnalyticsEvents: setAnalyticsEvents,
+    });
+    return () => {
+      unsubAdminData();
+    };
+  }, [currentUser, guardEvaluation.authorized, biometricLockRequired]);
 
   // Persist preview draft locally for instant reload smoothness
   useEffect(() => {
@@ -793,13 +833,7 @@ function AppContent() {
           guardEvaluation={guardEvaluation}
           ownerEmail={OWNER_ADMIN_EMAIL}
           passkeys={passkeys}
-          biometricLockRequired={
-            guardEvaluation.authorized &&
-            biometricLockEnabled &&
-            !biometricUnlocked &&
-            (passkeys.length > 0 ||
-              loadPairedDevicePasskeys(OWNER_ADMIN_EMAIL).length > 0)
-          }
+          biometricLockRequired={biometricLockRequired}
           onBiometricUnlockSuccess={async ({ credentialId, nextSignCount, deviceLabel }) => {
             setBiometricUnlocked(true);
             touchAdminPasskeyUsage({
@@ -818,32 +852,40 @@ function AppContent() {
           }}
           onBackToHub={navigateBackToHub}
         >
-          <AdminPage
-            config={siteConfig}
-            ownerUid={currentUser?.uid || ''}
-            ownerEmail={currentUser?.email || OWNER_ADMIN_EMAIL}
-            knownCloudLinkIds={knownCloudLinkIds}
-            analyticsEvents={analyticsEvents}
-            messages={messages}
-            subscribers={subscribers}
-            passkeys={passkeys}
-            biometricLockEnabled={biometricLockEnabled}
-            gmpQuotaExceeded={gmpQuotaExceeded}
-            onToggleBiometricLock={(enabled) => {
-              setBiometricLockPreferred(enabled);
-              setBiometricLockEnabled(enabled);
-            }}
-            onLockStudio={() => setBiometricUnlocked(false)}
-            onUpdateConfig={handleAdminUpdateConfig}
-            onUpdateKnownCloudLinkIds={setKnownCloudLinkIds}
-            onDeleteMessage={handleDeleteMessage}
-            onToggleMessageRead={handleToggleMessageRead}
-            onSignOut={async () => {
-              setBiometricUnlocked(false);
-              await signOutOwner();
-            }}
-            onBackToHub={navigateBackToHub}
-          />
+          <Suspense
+            fallback={
+              <div className="min-h-screen flex items-center justify-center font-ibm-mono text-xs text-[#FAF6F0]">
+                Loading Link Hub Studio...
+              </div>
+            }
+          >
+            <AdminPage
+              config={siteConfig}
+              ownerUid={currentUser?.uid || ''}
+              ownerEmail={currentUser?.email || OWNER_ADMIN_EMAIL}
+              knownCloudLinkIds={knownCloudLinkIds}
+              analyticsEvents={analyticsEvents}
+              messages={messages}
+              subscribers={subscribers}
+              passkeys={passkeys}
+              biometricLockEnabled={biometricLockEnabled}
+              gmpQuotaExceeded={gmpQuotaExceeded}
+              onToggleBiometricLock={(enabled) => {
+                setBiometricLockPreferred(enabled);
+                setBiometricLockEnabled(enabled);
+              }}
+              onLockStudio={() => setBiometricUnlocked(false)}
+              onUpdateConfig={handleAdminUpdateConfig}
+              onUpdateKnownCloudLinkIds={setKnownCloudLinkIds}
+              onDeleteMessage={handleDeleteMessage}
+              onToggleMessageRead={handleToggleMessageRead}
+              onSignOut={async () => {
+                setBiometricUnlocked(false);
+                await signOutOwner();
+              }}
+              onBackToHub={navigateBackToHub}
+            />
+          </Suspense>
         </AdminAuthGate>
       )}
 
@@ -866,15 +908,23 @@ function AppContent() {
       )}
 
       {activeRoute === 'pass' && (
-        <PassView
-          profile={profile}
-          socials={socials}
-          links={links}
-          designSystem={designSystem}
-          avatarUrl={profile.avatarUrl}
-          onBackToProfile={() => setActiveRoute('hub')}
-          onOpenShare={() => setShowShareModal(true)}
-        />
+        <Suspense
+          fallback={
+            <div className="min-h-screen flex items-center justify-center font-ibm-mono text-xs text-[#FAF6F0]">
+              Loading 3D Builder Pass...
+            </div>
+          }
+        >
+          <PassView
+            profile={profile}
+            socials={socials}
+            links={links}
+            designSystem={designSystem}
+            avatarUrl={profile.avatarUrl}
+            onBackToProfile={() => setActiveRoute('hub')}
+            onOpenShare={() => setShowShareModal(true)}
+          />
+        </Suspense>
       )}
 
       {activeRoute === 'hub' && (
@@ -1094,9 +1144,9 @@ function AppContent() {
                       )}
                       {profile.bioMiddle}
                       {profile.bioLinkText.trim() &&
-                        (profile.bioLinkUrl.trim() ? (
+                        (safeHttpHref(profile.bioLinkUrl) ? (
                           <a
-                            href={profile.bioLinkUrl}
+                            href={safeHttpHref(profile.bioLinkUrl)}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="font-bold underline decoration-2 underline-offset-2 transition-colors hover:opacity-80"
@@ -1120,10 +1170,13 @@ function AppContent() {
             {/* 2. SOCIAL LINKS ROW */}
             {socials.length > 0 && (
               <div className="flex flex-wrap items-center gap-2.5 px-1">
-                {socials.map((social) => (
+                {socials.map((social) => {
+                  const safeSocialUrl = safeHttpHref(social.url);
+                  if (!safeSocialUrl) return null;
+                  return (
                   <a
                     key={social.id}
-                    href={social.url}
+                    href={safeSocialUrl}
                     target="_blank"
                     rel="noopener noreferrer"
                     aria-label={social.label}
@@ -1136,7 +1189,8 @@ function AppContent() {
                   >
                     <BrandIcon platform={social.platform} className="w-[18px] h-[18px] sm:w-4 sm:h-4" />
                   </a>
-                ))}
+                  );
+                })}
               </div>
             )}
 
@@ -1413,9 +1467,9 @@ function AppContent() {
                           <a
                             href={
                               profile.githubRepo
-                                ? `https://github.com/${profile.githubUsername}/${profile.githubRepo}`
-                                : profile.githubProfileUrl ||
-                                  `https://github.com/${profile.githubUsername}`
+                                ? `https://github.com/${encodeURIComponent(profile.githubUsername)}/${encodeURIComponent(profile.githubRepo)}`
+                                : safeHttpHref(profile.githubProfileUrl) ||
+                                  `https://github.com/${encodeURIComponent(profile.githubUsername)}`
                             }
                             target="_blank"
                             rel="noopener noreferrer"
@@ -1462,7 +1516,7 @@ function AppContent() {
                           className={`min-w-0 ${idx === 1 ? 'col-span-2' : ''}`}
                         >
                           <a
-                            href={topLink.url}
+                            href={safeHttpHref(topLink.url) || '#'}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="inline-flex items-center gap-1 py-0.5 text-[#FAF6F0]/90 hover:text-[#FAF6F0] hover:underline max-w-full"
@@ -1497,9 +1551,9 @@ function AppContent() {
               profile.buyMeACoffeeUrl?.trim() ? 'justify-between' : 'justify-end'
             }`}
           >
-            {profile.buyMeACoffeeUrl?.trim() && (
+            {safeHttpHref(profile.buyMeACoffeeUrl) && (
               <a
-                href={profile.buyMeACoffeeUrl}
+                href={safeHttpHref(profile.buyMeACoffeeUrl)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="min-h-[44px] inline-flex items-center gap-2 px-4 py-2.5 rounded-full border text-xs font-bold shadow-lg transition-all duration-150 hover:-translate-y-0.5 hover:opacity-95"

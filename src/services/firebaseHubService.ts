@@ -324,6 +324,13 @@ function resolveMediaUrlFromCache(rawUrl?: string): string {
   return resolvedClientMediaCache.get(clean) || clean;
 }
 
+const SAFE_CLIENT_MEDIA_MIMES = new Set(['image/webp', 'image/jpeg', 'image/png']);
+
+function sanitizeClientMediaMime(raw: unknown): string {
+  const clean = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+  return SAFE_CLIENT_MEDIA_MIMES.has(clean) ? clean : 'image/webp';
+}
+
 /**
  * Resolves a `/api/media/:mediaId` URL directly from Firestore `publicMedia/{mediaId}`
  * into a `data:image/...;base64,...` URI so cropping & rendering work even on static hosts.
@@ -347,7 +354,7 @@ export async function ensureClientMediaHydrated(
     const snap = await getDoc(doc(db, 'publicMedia', mediaId));
     if (snap.exists()) {
       const data = snap.data();
-      const mimeType = typeof data.mimeType === 'string' ? data.mimeType.trim() : 'image/webp';
+      const mimeType = sanitizeClientMediaMime(data.mimeType);
       const dataBase64 = typeof data.dataBase64 === 'string' ? data.dataBase64.trim() : '';
       if (dataBase64) {
         const dataUri = `data:${mimeType};base64,${dataBase64}`;
@@ -378,7 +385,7 @@ async function hydrateFirestoreMediaUrl(
     const snap = await getDoc(doc(db, 'publicMedia', mediaId));
     if (snap.exists()) {
       const data = snap.data();
-      const mimeType = typeof data.mimeType === 'string' ? data.mimeType.trim() : 'image/webp';
+      const mimeType = sanitizeClientMediaMime(data.mimeType);
       const dataBase64 = typeof data.dataBase64 === 'string' ? data.dataBase64.trim() : '';
       if (dataBase64) {
         const dataUri = `data:${mimeType};base64,${dataBase64}`;

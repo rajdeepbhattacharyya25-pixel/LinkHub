@@ -261,13 +261,11 @@ export function buildLandingSeoMetadata(
   }
 
   const description = fitMetaTextLength(rawDesc, 110, 160);
-  const canonicalUrl = cleanOrigin
-    ? route === 'hub'
-      ? `${cleanOrigin}${DEFAULT_PUBLIC_URL_PATH}`
-      : `${cleanOrigin}${DEFAULT_PUBLIC_URL_PATH}#${route}`
-    : route === 'hub'
-    ? DEFAULT_PUBLIC_URL_PATH
-    : `${DEFAULT_PUBLIC_URL_PATH}#${route}`;
+  const routePath =
+    route === 'hub'
+      ? DEFAULT_PUBLIC_URL_PATH
+      : `/${route}`;
+  const canonicalUrl = cleanOrigin ? `${cleanOrigin}${routePath}` : routePath;
 
   return {
     title,

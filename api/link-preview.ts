@@ -1,4 +1,7 @@
+import dns from 'node:dns/promises';
+
 interface ServerlessReq {
+  method?: string;
   url?: string;
   query?: Record<string, string | string[] | undefined>;
 }
@@ -7,6 +10,7 @@ interface ServerlessRes {
   status: (code: number) => ServerlessRes;
   setHeader: (name: string, value: string) => void;
   json: (body: unknown) => void;
+  end?: () => void;
 }
 
 interface LinkPreviewMetadata {
@@ -60,6 +64,44 @@ function setCachedPreview(key: string, value: Omit<LinkPreviewMetadata, 'cached'
   });
 }
 
+function isPrivateIpAddress(ip: string): boolean {
+  const clean = ip.trim().toLowerCase().replace(/^\[|\]$/g, '');
+  if (!clean) return true;
+
+  const v4Mapped = clean.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  const target = v4Mapped ? v4Mapped[1] : clean;
+
+  const ipv4Match = target.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (ipv4Match) {
+    const [a, b, c, d] = ipv4Match.slice(1).map(Number);
+    if ([a, b, c, d].some((oct) => Number.isNaN(oct) || oct < 0 || oct > 255)) return true;
+    if (a === 0 || a === 10 || a === 127) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 0 && c === 0) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 198 && (b === 18 || b === 19)) return true;
+    if (a >= 224) return true;
+    return false;
+  }
+
+  if (
+    target === '::' ||
+    target === '::1' ||
+    target.startsWith('0:0:0:0:') ||
+    target.startsWith('fc') ||
+    target.startsWith('fd') ||
+    /^fe[89ab][0-9a-f]:/.test(target) ||
+    target.startsWith('64:ff9b:') ||
+    target.startsWith('ff') ||
+    target.includes('::ffff:')
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function isPrivateOrBlockedHostname(hostname: string): boolean {
   const host = hostname.trim().toLowerCase().replace(/^\[|\]$/g, '');
   if (!host) return true;
@@ -75,36 +117,21 @@ function isPrivateOrBlockedHostname(hostname: string): boolean {
   ) {
     return true;
   }
+  if (/^\d+$/.test(host) || /^0x[0-9a-f]+$/.test(host)) return true;
 
   const ipv4Match = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (ipv4Match) {
-    const [a, b, c, d] = ipv4Match.slice(1).map(Number);
-    if ([a, b, c, d].some((oct) => Number.isNaN(oct) || oct < 0 || oct > 255)) return true;
-    if (a === 0 || a === 10 || a === 127) return true;
-    if (a === 169 && b === 254) return true;
-    if (a === 172 && b >= 16 && b <= 31) return true;
-    if (a === 192 && b === 168) return true;
-    if (a === 100 && b >= 64 && b <= 127) return true;
+    if (ipv4Match.slice(1).some((part) => part.length > 1 && part.startsWith('0'))) return true;
+    return isPrivateIpAddress(host);
   }
-
-  if (
-    host.startsWith('fe80:') ||
-    host.startsWith('fc') ||
-    host.startsWith('fd') ||
-    host.startsWith('::ffff:127.') ||
-    host.startsWith('::ffff:10.') ||
-    host.startsWith('::ffff:192.168.')
-  ) {
-    return true;
-  }
-
-  if (!ipv4Match && !host.includes('.')) return true;
+  if (host.includes(':')) return isPrivateIpAddress(host);
+  if (!host.includes('.')) return true;
   return false;
 }
 
 function validatePreviewTargetUrl(
   rawUrl: string
-): { valid: boolean; normalizedUrl?: string; reason?: string } {
+): { valid: boolean; normalizedUrl?: string; hostname?: string; reason?: string } {
   const trimmed = (rawUrl || '').trim();
   if (!trimmed) return { valid: false, reason: 'URL is empty.' };
   if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed) && !/^https?:\/\//i.test(trimmed)) {
@@ -116,13 +143,29 @@ function validatePreviewTargetUrl(
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
       return { valid: false, reason: 'Only HTTP/HTTPS URLs are allowed.' };
     }
+    if (parsed.username || parsed.password) {
+      return { valid: false, reason: 'Credentials in URL are not allowed.' };
+    }
+    if (parsed.port && parsed.port !== '80' && parsed.port !== '443') {
+      return { valid: false, reason: 'Only standard HTTP/HTTPS ports are allowed.' };
+    }
     if (isPrivateOrBlockedHostname(parsed.hostname)) {
       return { valid: false, reason: 'Private or local network URLs are blocked.' };
     }
     parsed.hash = '';
-    return { valid: true, normalizedUrl: parsed.toString() };
+    return { valid: true, normalizedUrl: parsed.toString(), hostname: parsed.hostname };
   } catch {
     return { valid: false, reason: 'Invalid URL format.' };
+  }
+}
+
+async function assertPublicDns(hostname: string): Promise<boolean> {
+  try {
+    const records = await dns.lookup(hostname, { all: true });
+    if (!Array.isArray(records) || records.length === 0) return false;
+    return records.every((rec) => !isPrivateIpAddress(rec.address));
+  } catch {
+    return false;
   }
 }
 
@@ -286,9 +329,11 @@ async function readBoundedText(response: globalThis.Response, maxBytes: number):
     while (totalBytes < maxBytes) {
       const { done, value } = await reader.read();
       if (done || !value) break;
-      totalBytes += value.byteLength;
-      result += decoder.decode(value, { stream: true });
-      if (result.includes('</head>')) break;
+      const remaining = maxBytes - totalBytes;
+      const slice = value.byteLength > remaining ? value.subarray(0, remaining) : value;
+      totalBytes += slice.byteLength;
+      result += decoder.decode(slice, { stream: true });
+      if (/<\/head>/i.test(result)) break;
     }
     result += decoder.decode();
   } finally {
@@ -364,11 +409,18 @@ function extractQueryParam(req: ServerlessReq, key: string): string {
 }
 
 export default async function handler(req: ServerlessReq, res: ServerlessRes) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  const method = (req.method || 'GET').toUpperCase();
+  if (method !== 'GET' && method !== 'HEAD') {
+    res.setHeader('Allow', 'GET, HEAD');
+    res.status(405).json({ ok: false, found: false, imageUrl: null, sourceUrl: '', error: 'Method not allowed.' });
+    return;
+  }
+
+  res.setHeader('X-Content-Type-Options', 'nosniff');
 
   const rawUrl = extractQueryParam(req, 'url');
   const check = validatePreviewTargetUrl(rawUrl);
-  if (!check.valid || !check.normalizedUrl) {
+  if (!check.valid || !check.normalizedUrl || !check.hostname) {
     res.status(400).json({
       ok: false,
       found: false,
@@ -384,6 +436,10 @@ export default async function handler(req: ServerlessReq, res: ServerlessRes) {
   const cached = getCachedPreview(normalizedUrl);
   if (cached) {
     res.setHeader('Cache-Control', 'public, max-age=300');
+    if (method === 'HEAD') {
+      res.status(200).end?.();
+      return;
+    }
     res.json(cached);
     return;
   }
@@ -392,42 +448,71 @@ export default async function handler(req: ServerlessReq, res: ServerlessRes) {
   let partialDesc: string | undefined;
   let partialSiteName: string | undefined;
 
-  // Tier 1: Direct SSRF-guarded HTML/Image fetch (bounded to 3.5s for Vercel 10s limit)
+  // Tier 1: Direct DNS-checked, redirect-verified HTML/Image fetch (bounded to 3.5s)
   try {
-    const upstream = await fetch(normalizedUrl, {
-      method: 'GET',
-      redirect: 'follow',
-      signal: AbortSignal.timeout(3500),
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        Accept: 'text/html,application/xhtml+xml,image/*;q=0.8,*/*;q=0.5',
-        'Accept-Language': 'en-US,en;q=0.9',
-      },
-    });
+    let currentUrl = normalizedUrl;
+    let currentHost = check.hostname;
+    let upstream: globalThis.Response | null = null;
 
-    const finalUrl = upstream.url || normalizedUrl;
-    const finalCheck = validatePreviewTargetUrl(finalUrl);
-    if (!finalCheck.valid) {
-      res.status(403).json({
-        ok: true,
-        found: false,
-        imageUrl: null,
-        sourceUrl: normalizedUrl,
-        cached: false,
-        error: 'Redirect target blocked.',
+    for (let hop = 0; hop <= 3; hop++) {
+      const dnsSafe = await assertPublicDns(currentHost);
+      if (!dnsSafe) {
+        res.status(403).json({
+          ok: false,
+          found: false,
+          imageUrl: null,
+          sourceUrl: normalizedUrl,
+          cached: false,
+          error: 'Target host blocked.',
+        });
+        return;
+      }
+
+      const attempt = await fetch(currentUrl, {
+        method: 'GET',
+        redirect: 'manual',
+        signal: AbortSignal.timeout(3500),
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          Accept: 'text/html,application/xhtml+xml,image/*;q=0.8,*/*;q=0.5',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
       });
-      return;
+
+      if (attempt.status >= 300 && attempt.status < 400) {
+        const location = attempt.headers.get('location');
+        if (!location || hop === 3) break;
+        const nextUrl = new URL(location, currentUrl).toString();
+        const nextCheck = validatePreviewTargetUrl(nextUrl);
+        if (!nextCheck.valid || !nextCheck.normalizedUrl || !nextCheck.hostname) {
+          res.status(403).json({
+            ok: false,
+            found: false,
+            imageUrl: null,
+            sourceUrl: normalizedUrl,
+            cached: false,
+            error: 'Redirect target blocked.',
+          });
+          return;
+        }
+        currentUrl = nextCheck.normalizedUrl;
+        currentHost = nextCheck.hostname;
+        continue;
+      }
+
+      upstream = attempt;
+      break;
     }
 
-    if (upstream.ok) {
+    if (upstream && upstream.ok) {
       const contentType = (upstream.headers.get('content-type') || '').toLowerCase();
-      if (contentType.startsWith('image/')) {
+      if (contentType.startsWith('image/') && !contentType.includes('svg')) {
         const directImage: Omit<LinkPreviewMetadata, 'cached'> = {
           ok: true,
           found: true,
-          imageUrl: finalUrl,
-          sourceUrl: finalUrl,
+          imageUrl: currentUrl,
+          sourceUrl: currentUrl,
         };
         setCachedPreview(normalizedUrl, directImage);
         res.setHeader('Cache-Control', 'public, max-age=300');
@@ -437,7 +522,7 @@ export default async function handler(req: ServerlessReq, res: ServerlessRes) {
 
       if (contentType.includes('text/html') || contentType.includes('application/xhtml+xml')) {
         const html = await readBoundedText(upstream, 262_144);
-        const extracted = extractLinkPreviewMetadata(html, finalUrl);
+        const extracted = extractLinkPreviewMetadata(html, currentUrl);
         partialTitle = extracted.title;
         partialDesc = extracted.description;
         partialSiteName = extracted.siteName;
@@ -457,7 +542,7 @@ export default async function handler(req: ServerlessReq, res: ServerlessRes) {
     // Fall through to Microlink & platform/screenshot resolvers
   }
 
-  // Tier 2: Fast Microlink metadata extraction (3.0s timeout, no slow headless screenshot)
+  // Tier 2: Fast Microlink metadata extraction
   const microlink = await fetchMicrolinkMetadata(normalizedUrl);
   if (microlink) {
     partialTitle = microlink.title || partialTitle;
@@ -493,5 +578,9 @@ export default async function handler(req: ServerlessReq, res: ServerlessRes) {
   };
   setCachedPreview(normalizedUrl, finalPayload);
   res.setHeader('Cache-Control', 'public, max-age=300');
+  if (method === 'HEAD') {
+    res.status(200).end?.();
+    return;
+  }
   res.json({ ...finalPayload, cached: false });
 }

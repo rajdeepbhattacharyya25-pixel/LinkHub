@@ -248,8 +248,8 @@ service cloud.firestore {
 
     // 2. Public Portfolio Links (/links/{linkId})
     match /links/{linkId} {
-      allow get: if isValidId(linkId) && (resource == null || existing().isPublic == true || isSoloOwner());
-      allow list: if resource.data.isPublic == true || isBootstrappedOwnerEmail();
+      allow get: if isValidId(linkId) && (existing().isPublic == true || isSoloOwner());
+      allow list: if resource.data.isPublic == true || isSoloOwner();
       allow create: if isSoloOwner()
         && isValidId(linkId)
         && isValidHubLink(incoming(), linkId)
@@ -303,7 +303,7 @@ service cloud.firestore {
     // 5. Write-Only Visitor Messages (/messages/{messageId}) — Admin-Only Read/Manage
     match /messages/{messageId} {
       allow get: if isSoloOwner() && isValidId(messageId);
-      allow list: if isBootstrappedOwnerEmail();
+      allow list: if isSoloOwner();
       allow create: if isValidId(messageId)
         && isValidVisitorMessage(incoming())
         && incoming().read == false
@@ -323,7 +323,7 @@ service cloud.firestore {
     // 6. Write-Only Update Subscribers (/subscribers/{subscriberId}) — Admin-Only Read/Delete
     match /subscribers/{subscriberId} {
       allow get: if isSoloOwner() && isValidId(subscriberId);
-      allow list: if isBootstrappedOwnerEmail();
+      allow list: if isSoloOwner();
       allow create: if isValidId(subscriberId)
         && isValidUpdateSubscriber(incoming())
         && incoming().createdAt == request.time;
@@ -334,7 +334,7 @@ service cloud.firestore {
     // 7. Outbound Link Click Telemetry (/analyticsEvents/{eventId})
     match /analyticsEvents/{eventId} {
       allow get: if isSoloOwner() && isValidId(eventId);
-      allow list: if isBootstrappedOwnerEmail();
+      allow list: if isSoloOwner();
       allow create: if isValidId(eventId)
         && isValidAnalyticsEvent(incoming())
         && incoming().createdAt == request.time
@@ -349,7 +349,7 @@ service cloud.firestore {
     // 8. Owner Media Asset Registry (/mediaAssets/{assetId})
     match /mediaAssets/{assetId} {
       allow get: if isSoloOwner() && isValidId(assetId);
-      allow list: if isBootstrappedOwnerEmail() && resource.data.ownerUid == request.auth.uid;
+      allow list: if isSoloOwner() && resource.data.ownerUid == request.auth.uid;
       allow create: if isSoloOwner()
         && isValidId(assetId)
         && isValidMediaAsset(incoming())
@@ -373,7 +373,7 @@ service cloud.firestore {
     // 9. Owner Biometric Passkey Registry (/adminPasskeys/{credentialId})
     match /adminPasskeys/{credentialId} {
       allow get: if isSoloOwner() && isValidPasskeyId(credentialId);
-      allow list: if isBootstrappedOwnerEmail() && resource.data.ownerUid == request.auth.uid;
+      allow list: if isSoloOwner() && resource.data.ownerUid == request.auth.uid;
       allow create: if isSoloOwner()
         && isValidPasskeyId(credentialId)
         && isValidAdminPasskey(incoming(), credentialId)

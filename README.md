@@ -17,13 +17,16 @@
 
 | Environment / Endpoint | URL | Description |
 | :--- | :--- | :--- |
-| **Production App (Live)** | [**`https://rajdeepbhattacharyya-linkhub.vercel.app`**](https://rajdeepbhattacharyya-linkhub.vercel.app) | Primary public developer portfolio & link hub |
-| **Interactive Digital Pass** | [**`.../pass` (`?view=pass`)**](https://rajdeepbhattacharyya-linkhub.vercel.app/?view=pass) | 3D tilt-reactive Creator & Builder Pass with `.vcf` & PNG export |
-| **Solo Owner Studio** | [**`.../admin`**](https://rajdeepbhattacharyya-linkhub.vercel.app/admin) | Zero-trust Google Auth + WebAuthn Biometric Admin Studio |
-| **LLM Context (`llms.txt`)** | [**`.../llms.txt`**](https://rajdeepbhattacharyya-linkhub.vercel.app/llms.txt) | Concise AI/LLM discovery manifest (GEO standard) |
-| **Full LLM Profile (`llms-full.txt`)** | [**`.../llms-full.txt`**](https://rajdeepbhattacharyya-linkhub.vercel.app/llms-full.txt) | Full markdown dossier including articles, stack, and links |
-| **AI Profile JSON** | [**`.../.well-known/ai-profile.json`**](https://rajdeepbhattacharyya-linkhub.vercel.app/.well-known/ai-profile.json) | Structured machine-readable developer identity & skills |
+| **Production App (Live)** | [**`https://rajdeepbhattacharyya-linkhub.vercel.app/RajdeepBhattacharyya-LinkHub`**](https://rajdeepbhattacharyya-linkhub.vercel.app/RajdeepBhattacharyya-LinkHub) | Primary public developer portfolio & link hub |
+| **Interactive Digital Pass** | [**`.../pass`**](https://rajdeepbhattacharyya-linkhub.vercel.app/pass) | 3D tilt-reactive Creator & Builder Pass with camera-scannable ISO 18004 QR, `.vcf` & PNG export |
+| **Work With Me** | [**`.../work`**](https://rajdeepbhattacharyya-linkhub.vercel.app/work) | Direct collaboration & inquiry page backed by Cloud Firestore |
+| **Articles & Notes** | [**`.../posts`**](https://rajdeepbhattacharyya-linkhub.vercel.app/posts) | Technical articles and builder notes |
+| **Solo Owner Studio** | [**`.../admin`**](https://rajdeepbhattacharyya-linkhub.vercel.app/admin) | Zero-trust Google Auth + WebAuthn Biometric Admin Studio with real-time cloud auto-save |
+| **LLM Context (`llms.txt`)** | [**`.../llms.txt`**](https://rajdeepbhattacharyya-linkhub.vercel.app/llms.txt) | Concise AI/LLM discovery manifest with TL;DR, skills, projects & FAQ (GEO standard) |
+| **Full LLM Profile (`llms-full.txt`)** | [**`.../llms-full.txt`**](https://rajdeepbhattacharyya-linkhub.vercel.app/llms-full.txt) | Full markdown dossier including articles, stack, and verified social links |
+| **AI Profile JSON** | [**`.../.well-known/ai-profile.json`**](https://rajdeepbhattacharyya-linkhub.vercel.app/.well-known/ai-profile.json) | Structured machine-readable developer identity (`sameAs`, `knowsAbout`, FAQ, links) |
 | **Dynamic OpenGraph Card** | [**`.../og-card.svg`**](https://rajdeepbhattacharyya-linkhub.vercel.app/og-card.svg) | Server-rendered 1200×630 SVG social card synced with active Pantone theme |
+| **Sitemap & Robots** | [**`.../sitemap.xml`**](https://rajdeepbhattacharyya-linkhub.vercel.app/sitemap.xml) · [**`.../robots.txt`**](https://rajdeepbhattacharyya-linkhub.vercel.app/robots.txt) | Live XML sitemap & AI-friendly crawler rules welcoming Googlebot, GPTBot, ClaudeBot, PerplexityBot |
 
 </div>
 
@@ -220,22 +223,33 @@ All persistent state is stored in Cloud Firestore and protected by `firestore.ru
 
 ---
 
-## 🔌 Server API & Discovery Endpoints
+## 🔌 Vercel Serverless API, SEO/GEO & Security Architecture
 
-| Method & Route | Cache Policy | Description |
+In production on **Vercel**, five self-contained Node ESM serverless functions under `api/` provide full parity with the local Express dev server (`server.ts`) while staying well within Vercel Hobby's 12-function limit:
+
+| Method & Route | Handler / Cache Policy | Description |
 | :--- | :--- | :--- |
-| `GET /` | Dynamic SSR | Injects live Firestore profile SEO tags, Canonical URL, OpenGraph, and JSON-LD `@graph` into `index.html` |
-| `GET /api/health` | `no-store` | Returns `{ ok: true, cacheSize }` for uptime monitoring |
-| `GET /api/public-config` | `no-store` | Provides runtime client configuration (`mapsApiKey`) without exposing secrets in source |
-| `GET /api/link-preview?url=...` | `public, max-age=300` | SSRF-guarded OpenGraph/Twitter image & title extractor with 6-hour in-memory LRU cache |
-| `GET /api/image-proxy?url=...` | `public, max-age=300` | SSRF-guarded, 5 MB bounded image proxy enabling CORS-safe canvas cropping in Studio |
-| `GET /api/media/:mediaId` | `public, max-age=31536000, immutable` | Serves Firestore `publicMedia` documents as binary images with `ETag` (`304 Not Modified`) support |
-| `GET /og-card.svg` | `public, max-age=300` | Dynamically renders a 1200×630 SVG OpenGraph social preview card styled with the active Pantone palette |
-| `GET /llms.txt` | `public, max-age=120` | Concise AI/LLM discovery file following the `llms.txt` specification |
-| `GET /llms-full.txt` | `public, max-age=120` | Extended Markdown profile containing full blog post content and project descriptions |
-| `GET /.well-known/ai-profile.json` | `public, max-age=120` | Structured JSON discovery endpoint for AI search engines and developer directories |
-| `GET /sitemap.xml` | `public, max-age=300` | Dynamic XML sitemap including `/`, `/?view=pass`, `/?view=posts`, and `/llms.txt` |
-| `GET /robots.txt` | `public, max-age=300` | Crawler rules allowing Googlebot, Bingbot, GPTBot, ClaudeBot, and PerplexityBot while disallowing `/admin` |
+| `GET /` · `/RajdeepBhattacharyya-LinkHub` | Static SPA + Schema.org `@graph` + `<noscript>` dossier | Pre-configured `Person`, `ProfilePage`, `WebSite`, `BreadcrumbList`, and `FAQPage` JSON-LD plus absolute OpenGraph tags |
+| `GET /api/health` | `api/public-config.ts` (`no-store`) | Uptime health endpoint (`{ ok: true, runtime: 'vercel' }`) |
+| `GET /api/public-config` | `api/public-config.ts` (`no-store`) | Runtime Maps key provider (`mapsApiKey`) without exposing secrets in client source |
+| `GET /api/link-preview?url=...` | `api/link-preview.ts` (`public, max-age=300`) | Hardened SSRF-guarded OpenGraph/Twitter extractor + Microlink + GitHub/YouTube/Screenshot fallback (strictly `GET`/`HEAD`, bounded under Vercel's 10s limit) |
+| `GET /api/image-proxy?url=...` | `api/image-proxy.ts` (`public, max-age=300`) | SSRF-guarded, 5 MB bounded image proxy with `nosniff` for CORS-safe canvas cropping in Studio |
+| `GET /api/media/:mediaId` | `api/media/[mediaId].ts` (`public, max-age=31536000, immutable`) | Serves Firestore `publicMedia` documents as binary images with `ETag` (`304 Not Modified`) support |
+| `GET /robots.txt` · `/sitemap.xml` | `api/seo.ts` (`s-maxage=300`) | Live XML sitemap and explicit allow rules for Googlebot, Bingbot, GPTBot, OAI-SearchBot, ClaudeBot, PerplexityBot, Google-Extended, and Applebot-Extended |
+| `GET /llms.txt` · `/llms-full.txt` | `api/seo.ts` (`s-maxage=120`) | GEO-optimized AI/LLM dossiers with TL;DR, skills matrix, live Firestore projects, `sameAs` links, and FAQs |
+| `GET /.well-known/ai-profile.json` | `api/seo.ts` (`s-maxage=120`) | Machine-readable JSON profile (`knowsAbout`, `sameAs`, FAQ, live links, `lastUpdated`) |
+| `GET /og-card.svg` | `api/seo.ts` (`s-maxage=300`) | Hex-validated, dynamically rendered 1200×630 SVG OpenGraph card synced with the active Pantone palette |
+
+### 🛡️ Production Security Controls (OWASP Top 10:2025)
+- **HTTP Security Headers (`vercel.json`):** Enforces `Strict-Transport-Security` (HSTS preload), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy`, global `Link` AI-discovery headers, and `X-Robots-Tag: noindex, nofollow, noarchive` on `/admin` and `/api/*`.
+- **SSRF & Method Hardening:** All API handlers enforce `GET`/`HEAD`-only (`405` on other methods) and block loopback, RFC 1918 private IPs, cloud metadata (`169.254.169.254`), octal/hex/decimal IPv4 tricks, and IPv6-mapped private ranges on both initial URLs and redirects.
+- **Zero-Trust Solo Admin:** Google verified-email allowlist + immutable Firestore UID lock + hardware WebAuthn passkeys + serialized Firestore writes with automatic fallback.
+
+### ☁️ Vercel Environment Variables
+Add these in **Vercel Project Settings → Environment Variables** (never commit `.env`):
+- `VITE_OWNER_ADMIN_EMAIL`
+- `VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_APP_ID`, `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_FIRESTORE_DATABASE_ID`, `VITE_FIREBASE_STORAGE_BUCKET`, `VITE_FIREBASE_MESSAGING_SENDER_ID`
+- `VITE_GOOGLE_MAPS_API_KEY` *(optional — enables live interactive Google Maps vector view)*
 
 ---
 

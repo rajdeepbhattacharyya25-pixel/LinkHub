@@ -182,17 +182,27 @@ export const PassView: React.FC<PassViewProps> = ({
     setTimeout(() => setCopiedEmail(false), 2000);
   };
 
+function escapeVCardValue(raw: string): string {
+  return String(raw || '')
+    .replace(/[\r\n\0]+/g, ' ')
+    .replace(/\\/g, '\\\\')
+    .replace(/;/g, '\\;')
+    .replace(/,/g, '\\,')
+    .trim();
+}
+
   const handleSaveVCard = () => {
+    const safeFullName = escapeVCardValue(displayFullName);
     const vcardLines = [
       'BEGIN:VCARD',
       'VERSION:3.0',
-      `FN:${displayFullName}`,
-      `N:${displayFullName};;;;`,
-      profile.role.trim() ? `TITLE:${profile.role.trim()}` : '',
-      profile.email.trim() ? `EMAIL;TYPE=INTERNET:${profile.email.trim()}` : '',
-      displayLocation ? `ADR;TYPE=WORK:;;${displayLocation};;;;` : '',
-      `URL:${hubShareUrl}`,
-      bioPlainSpaced ? `NOTE:${bioPlainSpaced}` : '',
+      `FN:${safeFullName}`,
+      `N:${safeFullName};;;;`,
+      profile.role.trim() ? `TITLE:${escapeVCardValue(profile.role)}` : '',
+      profile.email.trim() ? `EMAIL;TYPE=INTERNET:${escapeVCardValue(profile.email)}` : '',
+      displayLocation ? `ADR;TYPE=WORK:;;${escapeVCardValue(displayLocation)};;;;` : '',
+      `URL:${escapeVCardValue(hubShareUrl)}`,
+      bioPlainSpaced ? `NOTE:${escapeVCardValue(bioPlainSpaced)}` : '',
       'END:VCARD',
     ].filter(Boolean);
 
@@ -232,6 +242,7 @@ export const PassView: React.FC<PassViewProps> = ({
       ctx.fillStyle = cardGrad;
       ctx.strokeStyle = '#B8936E';
       ctx.lineWidth = 3;
+      ctx.beginPath();
       ctx.roundRect(80, 70, 1040, 620, 42);
       ctx.fill();
       ctx.stroke();
@@ -241,6 +252,7 @@ export const PassView: React.FC<PassViewProps> = ({
       ctx.setLineDash([8, 8]);
       ctx.strokeStyle = 'rgba(213, 196, 174, 0.25)';
       ctx.lineWidth = 1.5;
+      ctx.beginPath();
       ctx.roundRect(104, 94, 992, 572, 30);
       ctx.stroke();
       ctx.restore();
@@ -254,6 +266,7 @@ export const PassView: React.FC<PassViewProps> = ({
 
       // Metallic smart chip
       ctx.fillStyle = '#C89D6C';
+      ctx.beginPath();
       ctx.roundRect(145, 200, 74, 54, 10);
       ctx.fill();
       ctx.strokeStyle = '#3A2418';
@@ -739,7 +752,7 @@ export const PassView: React.FC<PassViewProps> = ({
                       ))}
                     </div>
                     <span className="font-ibm-mono text-[10px] text-[#D5C4AE]/85">
-                      PANTONE 19-1118 TCX
+                      {designSystem.pantoneCode || 'PANTONE 19-1118 TCX'}
                     </span>
                   </div>
 

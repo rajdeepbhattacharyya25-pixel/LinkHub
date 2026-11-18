@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 interface ServerlessReq {
+  method?: string;
   url?: string;
   query?: Record<string, string | string[] | undefined>;
   headers?: Record<string, string | string[] | undefined>;
@@ -58,6 +59,11 @@ const DEFAULT_PUBLIC_PATH = '/RajdeepBhattacharyya-LinkHub';
 
 let cachedFirebaseCfg: FirebaseCfg | null = null;
 let cachedHub: { data: PublicHubData; expiresAtMs: number } | null = null;
+
+function sanitizeHexColor(raw: unknown, fallback: string): string {
+  const val = String(raw || '').trim();
+  return /^#[0-9a-fA-F]{3,8}$/.test(val) ? val : fallback;
+}
 
 function resolveFirebaseCfg(): FirebaseCfg {
   if (cachedFirebaseCfg) return cachedFirebaseCfg;
@@ -124,16 +130,28 @@ function escapeXml(input: string): string {
     .replace(/'/g, '&apos;');
 }
 
+const CANONICAL_PRODUCTION_ORIGIN = (
+  process.env.SITE_CANONICAL_ORIGIN || 'https://rajdeepbhattacharyya-linkhub.vercel.app'
+).replace(/\/+$/, '');
+
+const ALLOWED_ORIGINS = new Set([
+  CANONICAL_PRODUCTION_ORIGIN,
+  'https://rajdeepbhattacharyya-linkhub.vercel.app',
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+]);
+
 function getRequestOrigin(req: ServerlessReq): string {
-  const xfProto = String(req.headers?.['x-forwarded-proto'] || '')
-    .split(',')[0]
-    .trim();
   const xfHost = String(req.headers?.['x-forwarded-host'] || '')
     .split(',')[0]
-    .trim();
-  const host = xfHost || String(req.headers?.host || '').trim() || 'rajdeepbhattacharyya-linkhub.vercel.app';
-  const proto = xfProto || (host.includes('localhost') || host.startsWith('127.') ? 'http' : 'https');
-  return `${proto}://${host}`.replace(/\/+$/, '');
+    .trim()
+    .toLowerCase();
+  const host = (xfHost || String(req.headers?.host || '').trim().toLowerCase()).replace(/[^a-z0-9.:-]/g, '');
+  if (host === 'localhost:3000' || host === '127.0.0.1:3000') {
+    return `http://${host}`;
+  }
+  const candidate = `https://${host}`;
+  return ALLOWED_ORIGINS.has(candidate) ? candidate : CANONICAL_PRODUCTION_ORIGIN;
 }
 
 function extractTypeParam(req: ServerlessReq): string {
@@ -161,16 +179,25 @@ function extractTypeParam(req: ServerlessReq): string {
 
 function defaultHubData(): PublicHubData {
   return {
-    name: 'Rajdeep Bhattacharyya',
+    name: 'Rajdeep',
     fullName: 'Rajdeep Bhattacharyya',
-    handle: '@rajdeepbhattacharyya',
-    role: 'Software, AI & Hardware Builder',
-    location: '',
-    bio: 'Personal developer portfolio, interactive 3D builder pass, live GitHub telemetry, and link studio.',
+    handle: '@_rajdeep.007_',
+    role: 'IT Student · SaaS & Product Builder',
+    location: 'Kolkata, India',
+    bio: 'IT student and builder interested in the intersection of software, AI, and hardware. I turn ideas into working projects — from SaaS tools and interactive web experiences to microcontroller-powered DIY.',
     email: '',
-    githubUsername: '',
-    seoKeywords: ['Software Engineering', 'AI', 'Hardware', 'Portfolio'],
-    socials: [],
+    githubUsername: 'rajdeepbhattacharyya25-pixel',
+    seoKeywords: [
+      'React', 'TypeScript', 'JavaScript', 'Python', 'Supabase', 'Git', 'GitHub',
+      'Vercel', 'Three.js', 'GSAP', 'Google AI Studio', 'Gemini API', 'Ollama',
+      'Hugging Face', 'n8n', 'ESP32', 'Arduino', 'WLED', 'SaaS Development',
+      'Frontend Development', 'AI Prototyping', 'Embedded Systems', 'Hardware Prototyping',
+    ],
+    socials: [
+      { platform: 'github', label: 'GitHub', url: 'https://github.com/rajdeepbhattacharyya25-pixel' },
+      { platform: 'linkedin', label: 'LinkedIn', url: 'https://www.linkedin.com/in/rajdeep-bhattacharyya-497945371/' },
+      { platform: 'instagram', label: 'Instagram', url: 'https://www.instagram.com/_rajdeep.007_/' },
+    ],
     posts: [],
     links: [],
     designSystem: {
@@ -317,21 +344,21 @@ async function loadLiveHubData(): Promise<PublicHubData> {
       fullName: String(profile.fullName || profile.name || '').trim() || fallback.fullName,
       handle: String(profile.handle || '').trim() || fallback.handle,
       role: String(profile.role || '').trim() || fallback.role,
-      location: String(profile.location || '').trim(),
+      location: String(profile.location || '').trim() || fallback.location,
       bio: bioParts.join(' ') || fallback.bio,
       email: String(profile.email || '').trim(),
-      githubUsername: String(profile.githubUsername || '').trim(),
+      githubUsername: String(profile.githubUsername || '').trim() || fallback.githubUsername,
       seoKeywords: keywordsRaw.length > 0 ? keywordsRaw : fallback.seoKeywords,
-      socials,
+      socials: socials.length > 0 ? socials : fallback.socials,
       posts,
       links,
       designSystem: {
-        canvasBg: String(ds.canvasBg || fallback.designSystem.canvasBg),
-        cardBg: String(ds.cardBg || fallback.designSystem.cardBg),
-        primaryText: String(ds.primaryText || fallback.designSystem.primaryText),
-        accentPrimary: String(ds.accentPrimary || fallback.designSystem.accentPrimary),
-        borderColor: String(ds.borderColor || fallback.designSystem.borderColor),
-        pantoneCode: String(ds.pantoneCode || fallback.designSystem.pantoneCode),
+        canvasBg: sanitizeHexColor(ds.canvasBg, fallback.designSystem.canvasBg),
+        cardBg: sanitizeHexColor(ds.cardBg, fallback.designSystem.cardBg),
+        primaryText: sanitizeHexColor(ds.primaryText, fallback.designSystem.primaryText),
+        accentPrimary: sanitizeHexColor(ds.accentPrimary, fallback.designSystem.accentPrimary),
+        borderColor: sanitizeHexColor(ds.borderColor, fallback.designSystem.borderColor),
+        pantoneCode: String(ds.pantoneCode || fallback.designSystem.pantoneCode).slice(0, 48),
       },
       updatedAtIso,
     };
@@ -343,6 +370,37 @@ async function loadLiveHubData(): Promise<PublicHubData> {
   }
 }
 
+function articleForRole(role: string): 'an' | 'a' {
+  return /^[aeiou]/i.test(role.trim()) ? 'an' : 'a';
+}
+
+function buildFaqEntries(data: PublicHubData, origin: string) {
+  const topSkills = data.seoKeywords.slice(0, 12).join(', ');
+  const githubUrl = data.githubUsername
+    ? `https://github.com/${data.githubUsername}`
+    : data.socials.find((s) => s.platform === 'github')?.url || '';
+  const linkedinUrl = data.socials.find((s) => s.platform === 'linkedin')?.url || '';
+
+  return [
+    {
+      question: `Who is ${data.fullName}?`,
+      answer: `${data.fullName} (${data.handle}) is ${articleForRole(data.role)} ${data.role}${data.location ? ` based in ${data.location}` : ''}. ${data.bio}`,
+    },
+    {
+      question: `What technologies, AI tools, and hardware does ${data.fullName} work with?`,
+      answer: `${data.fullName} works across software, AI, and hardware including ${topSkills || 'React, TypeScript, Python, Gemini API, ESP32, and Arduino'}.`,
+    },
+    {
+      question: `Where can I view ${data.fullName}'s projects, GitHub contributions, and digital pass?`,
+      answer: `Visit the official Link Hub at ${origin}${DEFAULT_PUBLIC_PATH}, the 3D Builder Pass at ${origin}/pass${githubUrl ? `, or GitHub at ${githubUrl}` : ''}.`,
+    },
+    {
+      question: `How can I contact or collaborate with ${data.fullName}?`,
+      answer: `Use the collaboration form at ${origin}/work${linkedinUrl ? ` or connect on LinkedIn at ${linkedinUrl}` : ''}.`,
+    },
+  ];
+}
+
 function buildRobotsTxt(origin: string): string {
   const crawlers = [
     'Googlebot',
@@ -352,12 +410,17 @@ function buildRobotsTxt(origin: string): string {
     'ChatGPT-User',
     'ClaudeBot',
     'Claude-Web',
+    'anthropic-ai',
     'PerplexityBot',
     'Google-Extended',
     'Applebot-Extended',
+    'cohere-ai',
+    'Meta-ExternalAgent',
   ];
   const lines = [
-    `# LLMs & AI Search Discovery: ${origin}/llms.txt`,
+    `# Official AI & LLM Discovery Index: ${origin}/llms.txt`,
+    `# Full AI Dossier: ${origin}/llms-full.txt`,
+    `# Structured Profile JSON: ${origin}/.well-known/ai-profile.json`,
     'User-agent: *',
     'Allow: /',
     'Disallow: /admin',
@@ -373,14 +436,12 @@ function buildRobotsTxt(origin: string): string {
 
 function buildSitemapXml(origin: string, updatedAtIso?: string): string {
   const lastmod = updatedAtIso ? updatedAtIso.slice(0, 10) : new Date().toISOString().slice(0, 10);
+  // Keep sitemap focused on indexable HTML pages; non-HTML AI files are linked via HTTP Link headers & robots.txt
   const urls = [
     { loc: `${origin}${DEFAULT_PUBLIC_PATH}`, changefreq: 'daily', priority: '1.0' },
     { loc: `${origin}/pass`, changefreq: 'weekly', priority: '0.8' },
     { loc: `${origin}/posts`, changefreq: 'weekly', priority: '0.8' },
     { loc: `${origin}/work`, changefreq: 'monthly', priority: '0.7' },
-    { loc: `${origin}/llms.txt`, changefreq: 'weekly', priority: '0.8' },
-    { loc: `${origin}/llms-full.txt`, changefreq: 'weekly', priority: '0.7' },
-    { loc: `${origin}/.well-known/ai-profile.json`, changefreq: 'weekly', priority: '0.7' },
   ];
   const entries = urls
     .map(
@@ -392,41 +453,64 @@ function buildSitemapXml(origin: string, updatedAtIso?: string): string {
 }
 
 function buildLlmsTxt(data: PublicHubData, origin: string, full: boolean): string {
+  const lastUpdated = data.updatedAtIso || new Date().toISOString();
+  const faqs = buildFaqEntries(data, origin);
   const lines: string[] = [
-    `# ${data.fullName} (${data.handle})`,
+    `# ${data.fullName} (${data.handle}) — Official Developer Portfolio & Link Hub`,
     '',
-    `> ${data.role}${data.location ? ` · ${data.location}` : ''}`,
+    `> **TL;DR:** ${data.fullName} is ${articleForRole(data.role)} ${data.role}${data.location ? ` based in ${data.location}` : ''}, building across SaaS web applications, AI prototyping, and microcontroller hardware (ESP32, Arduino, WLED).`,
     '',
+    `- **Canonical URL:** ${origin}${DEFAULT_PUBLIC_PATH}`,
+    `- **Last Updated:** ${lastUpdated}`,
+    '',
+    '## Entity Summary',
+    `| Field | Value |`,
+    `| :--- | :--- |`,
+    `| **Full Name** | ${data.fullName} |`,
+    `| **Handle** | ${data.handle} |`,
+    `| **Role** | ${data.role} |`,
+    `| **Location** | ${data.location || 'India'} |`,
+    `| **GitHub** | ${data.githubUsername ? `https://github.com/${data.githubUsername}` : 'N/A'} |`,
+    '',
+    '## About',
     data.bio,
     '',
-    '## Core Pages',
-    `- [Link Hub Portfolio](${origin}${DEFAULT_PUBLIC_PATH})`,
-    `- [3D Builder Pass](${origin}/pass)`,
-    `- [Articles & Notes](${origin}/posts)`,
-    `- [Work With Me](${origin}/work)`,
-    `- [Machine-Readable Profile JSON](${origin}/.well-known/ai-profile.json)`,
-    `- [Sitemap](${origin}/sitemap.xml)`,
+    '## Core Pages & Discovery Endpoints',
+    `- [Official Link Hub Portfolio](${origin}${DEFAULT_PUBLIC_PATH}): Primary portfolio, projects, live GitHub activity, and contact`,
+    `- [Interactive 3D Builder Pass](${origin}/pass): Scannable QR pass and vCard contact export`,
+    `- [Articles & Engineering Notes](${origin}/posts): Technical posts and write-ups`,
+    `- [Work With Me / Collaboration](${origin}/work): Project inquiries, hackathons, and collaborations`,
+    `- [Full LLM Context Dossier](${origin}/llms-full.txt): Complete markdown dossier for AI retrieval`,
+    `- [Structured AI Profile JSON](${origin}/.well-known/ai-profile.json): Machine-readable identity, skills, and links`,
+    `- [XML Sitemap](${origin}/sitemap.xml): Search crawler index`,
     '',
   ];
 
   if (data.seoKeywords.length > 0) {
-    lines.push('## Skills & Focus Areas', data.seoKeywords.join(', '), '');
+    lines.push('## Skills, Frameworks & Hardware Stack', data.seoKeywords.join(', '), '');
   }
 
   if (data.links.length > 0) {
-    lines.push('## Featured Links & Projects');
+    lines.push('## Featured Projects & Links');
     for (const l of data.links) {
-      lines.push(`- [${l.title}](${l.url})${l.description ? `: ${l.description}` : ''}`);
+      lines.push(
+        `- [${l.title}](${l.url})${l.category ? ` (${l.category})` : ''}${l.description ? `: ${l.description}` : ''}`
+      );
     }
     lines.push('');
   }
 
   if (data.socials.length > 0) {
-    lines.push('## Social Profiles');
+    lines.push('## Verified Social Profiles (sameAs)');
     for (const s of data.socials) {
-      lines.push(`- ${s.label}: ${s.url}`);
+      lines.push(`- **${s.label}:** ${s.url}`);
     }
     lines.push('');
+  }
+
+  lines.push('## Frequently Asked Questions');
+  for (const faq of faqs) {
+    lines.push(`### ${faq.question}`, faq.answer, '');
   }
 
   if (full && data.posts.length > 0) {
@@ -443,10 +527,12 @@ function buildLlmsTxt(data: PublicHubData, origin: string, full: boolean): strin
 }
 
 function buildAiProfileJson(data: PublicHubData, origin: string) {
+  const lastUpdated = data.updatedAtIso || new Date().toISOString();
   return {
     schema: 'https://llmstxt.org/',
-    version: '1.0',
+    version: '1.1',
     canonicalUrl: `${origin}${DEFAULT_PUBLIC_PATH}`,
+    lastUpdated,
     discovery: {
       llmsTxt: `${origin}/llms.txt`,
       llmsFullTxt: `${origin}/llms-full.txt`,
@@ -462,7 +548,8 @@ function buildAiProfileJson(data: PublicHubData, origin: string) {
       location: data.location,
       bio: data.bio,
       githubUsername: data.githubUsername,
-      skills: data.seoKeywords,
+      knowsAbout: data.seoKeywords,
+      sameAs: data.socials.map((s) => s.url),
     },
     socials: data.socials,
     links: data.links.map(({ id, title, url, description, category, pinned }) => ({
@@ -473,8 +560,8 @@ function buildAiProfileJson(data: PublicHubData, origin: string) {
       category,
       pinned,
     })),
+    faq: buildFaqEntries(data, origin),
     posts: data.posts.map(({ slug, title, excerpt, date }) => ({ slug, title, excerpt, date })),
-    updatedAt: data.updatedAtIso || null,
   };
 }
 
@@ -488,24 +575,32 @@ function renderOgCardSvg(data: PublicHubData): string {
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
-  <rect width="1200" height="630" fill="${escapeXml(ds.canvasBg)}"/>
-  <rect x="64" y="64" width="1072" height="502" rx="32" fill="${escapeXml(ds.cardBg)}" stroke="${escapeXml(ds.borderColor)}" stroke-width="2"/>
-  <rect x="112" y="116" width="230" height="36" rx="18" fill="${escapeXml(ds.accentPrimary)}"/>
+  <rect width="1200" height="630" fill="${sanitizeHexColor(ds.canvasBg, '#4A3324')}"/>
+  <rect x="64" y="64" width="1072" height="502" rx="32" fill="${sanitizeHexColor(ds.cardBg, '#F4EDE2')}" stroke="${sanitizeHexColor(ds.borderColor, '#D5C4AE')}" stroke-width="2"/>
+  <rect x="112" y="116" width="230" height="36" rx="18" fill="${sanitizeHexColor(ds.accentPrimary, '#6B4A2E')}"/>
   <text x="132" y="139" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" font-weight="700" fill="#FAF6F0">${pantone}</text>
-  <text x="112" y="248" font-family="system-ui, -apple-system, sans-serif" font-size="56" font-weight="800" fill="${escapeXml(ds.primaryText)}">${title}</text>
-  <text x="112" y="308" font-family="system-ui, -apple-system, sans-serif" font-size="28" font-weight="600" fill="${escapeXml(ds.accentPrimary)}">${subtitle}</text>
-  <text x="112" y="380" font-family="system-ui, -apple-system, sans-serif" font-size="22" fill="${escapeXml(ds.primaryText)}" opacity="0.82">${bio}</text>
-  <line x1="112" y1="472" x2="1088" y2="472" stroke="${escapeXml(ds.borderColor)}" stroke-width="1.5"/>
-  <text x="112" y="518" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="20" font-weight="600" fill="${escapeXml(ds.primaryText)}">${handle}</text>
-  <text x="1088" y="518" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" fill="${escapeXml(ds.accentPrimary)}">RajdeepBhattacharyya-LinkHub</text>
+  <text x="112" y="248" font-family="system-ui, -apple-system, sans-serif" font-size="56" font-weight="800" fill="${sanitizeHexColor(ds.primaryText, '#1A120E')}">${title}</text>
+  <text x="112" y="308" font-family="system-ui, -apple-system, sans-serif" font-size="28" font-weight="600" fill="${sanitizeHexColor(ds.accentPrimary, '#6B4A2E')}">${subtitle}</text>
+  <text x="112" y="380" font-family="system-ui, -apple-system, sans-serif" font-size="22" fill="${sanitizeHexColor(ds.primaryText, '#1A120E')}" opacity="0.82">${bio}</text>
+  <line x1="112" y1="472" x2="1088" y2="472" stroke="${sanitizeHexColor(ds.borderColor, '#D5C4AE')}" stroke-width="1.5"/>
+  <text x="112" y="518" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="20" font-weight="600" fill="${sanitizeHexColor(ds.primaryText, '#1A120E')}">${handle}</text>
+  <text x="1088" y="518" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" fill="${sanitizeHexColor(ds.accentPrimary, '#6B4A2E')}">RajdeepBhattacharyya-LinkHub</text>
 </svg>`;
 }
 
 export default async function handler(req: ServerlessReq, res: ServerlessRes) {
+  const method = (req.method || 'GET').toUpperCase();
+  if (method !== 'GET' && method !== 'HEAD') {
+    res.setHeader('Allow', 'GET, HEAD');
+    res.status(405).json({ error: 'Method not allowed.' });
+    return;
+  }
+
   const origin = getRequestOrigin(req);
   const type = extractTypeParam(req);
 
   res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
 
   if (type === 'robots') {
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
@@ -543,6 +638,7 @@ export default async function handler(req: ServerlessReq, res: ServerlessRes) {
 
     case 'og-card':
       res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
+      res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
       res.setHeader('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=600');
       res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
       res.status(200).send(renderOgCardSvg(data));

@@ -1,4 +1,5 @@
 interface ServerlessReq {
+  method?: string;
   url?: string;
   query?: Record<string, string | string[] | undefined>;
 }
@@ -25,8 +26,15 @@ function extractMode(req: ServerlessReq): string {
 }
 
 export default function handler(req: ServerlessReq, res: ServerlessRes) {
+  const method = (req.method || 'GET').toUpperCase();
+  if (method !== 'GET' && method !== 'HEAD') {
+    res.setHeader('Allow', 'GET, HEAD');
+    res.status(405).json({ error: 'Method not allowed.' });
+    return;
+  }
+
   res.setHeader('Cache-Control', 'no-store');
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
 
   const mode = extractMode(req);
   if (mode === 'health' || (req.url && req.url.startsWith('/api/health'))) {
@@ -34,11 +42,8 @@ export default function handler(req: ServerlessReq, res: ServerlessRes) {
     return;
   }
 
-  const mapsApiKey = (
-    process.env.VITE_GOOGLE_MAPS_API_KEY ||
-    process.env.GOOGLE_MAPS_API_KEY ||
-    ''
-  ).trim();
+  // Expose only the HTTP-referrer-restricted browser key (never a generic server key)
+  const mapsApiKey = (process.env.VITE_GOOGLE_MAPS_API_KEY || '').trim();
 
   res.status(200).json({ mapsApiKey });
 }

@@ -274,4 +274,17 @@ test('Vercel serverless api handlers execute cleanly in ESM and enforce SSRF & I
   const mediaRes = createMockRes();
   await mediaHandler({ url: '/api/media/..%2Fsecret' }, mediaRes);
   assert.equal(mediaRes.getResult().statusCode, 400);
+
+  // 4. Hardened SSRF blocks integer/hex/octal IPv4 obfuscation & enforces GET/HEAD (405 on POST)
+  const intIpRes = createMockRes();
+  await linkPreviewHandler({ url: '/api/link-preview?url=http://2130706433' }, intIpRes);
+  assert.equal(intIpRes.getResult().statusCode, 400);
+
+  const hexIpRes = createMockRes();
+  await imageProxyHandler({ url: '/api/image-proxy?url=http://0x7f000001' }, hexIpRes);
+  assert.equal(hexIpRes.getResult().statusCode, 400);
+
+  const postRes = createMockRes();
+  await linkPreviewHandler({ method: 'POST', url: '/api/link-preview?url=https://github.com' }, postRes);
+  assert.equal(postRes.getResult().statusCode, 405);
 });

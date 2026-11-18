@@ -1,7 +1,9 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
 interface ServerlessReq {
+  method?: string;
   url?: string;
   query?: Record<string, string | string[] | undefined>;
   headers?: Record<string, string | string[] | undefined>;
@@ -54,6 +56,18 @@ function resolveFirebaseConfig(): FirebaseConfigSubset {
   return cachedFirebaseCfg;
 }
 
+function matchesExpectedMagicBytes(buf: Buffer, mime: string): boolean {
+  if (buf.byteLength < 12) return false;
+  if (mime === 'image/jpeg') return buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff;
+  if (mime === 'image/png') {
+    return buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47;
+  }
+  if (mime === 'image/webp') {
+    return buf.subarray(0, 4).toString('ascii') === 'RIFF' && buf.subarray(8, 12).toString('ascii') === 'WEBP';
+  }
+  return false;
+}
+
 function extractMediaId(req: ServerlessReq): string {
   const rawParam = req.query?.mediaId;
   const fromQuery = (Array.isArray(rawParam) ? rawParam[0] || '' : rawParam || '').trim();
@@ -75,8 +89,17 @@ function extractMediaId(req: ServerlessReq): string {
 }
 
 export default async function handler(req: ServerlessReq, res: ServerlessRes) {
-  const rawId = extractMediaId(req);
+  const method = (req.method || 'GET').toUpperCase();
+  if (method !== 'GET' && method !== 'HEAD') {
+    res.setHeader('Allow', 'GET, HEAD');
+    res.status(405).json({ error: 'Method not allowed.' });
+    return;
+  }
 
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+
+  const rawId = extractMediaId(req);
   if (!/^[a-zA-Z0-9_-]{1,128}$/.test(rawId)) {
     res.status(400).json({ error: 'Invalid media ID.' });
     return;
@@ -84,7 +107,7 @@ export default async function handler(req: ServerlessReq, res: ServerlessRes) {
 
   const { projectId, firestoreDatabaseId, apiKey } = resolveFirebaseConfig();
   if (!projectId || !apiKey) {
-    res.status(503).json({ error: 'Cloud media store not configured.' });
+    res.status(503).json({ error: 'Cloud media store unavailable.' });
     return;
   }
 
@@ -103,7 +126,7 @@ export default async function handler(req: ServerlessReq, res: ServerlessRes) {
       return;
     }
     if (!upstream.ok) {
-      res.status(502).json({ error: `Media store returned ${upstream.status}` });
+      res.status(502).json({ error: 'Unable to read cloud media.' });
       return;
     }
 
@@ -121,12 +144,13 @@ export default async function handler(req: ServerlessReq, res: ServerlessRes) {
     }
 
     const buffer = Buffer.from(dataBase64, 'base64');
-    if (buffer.byteLength === 0 || buffer.byteLength > 700_000) {
+    if (buffer.byteLength === 0 || buffer.byteLength > 700_000 || !matchesExpectedMagicBytes(buffer, mimeType)) {
       res.status(404).json({ error: 'Corrupt or oversized media payload.' });
       return;
     }
 
-    const etag = `"pm-${rawId}-${buffer.byteLength}"`;
+    const digest = crypto.createHash('sha256').update(buffer).digest('hex').slice(0, 16);
+    const etag = `"pm-${rawId}-${digest}"`;
     if (req.headers?.['if-none-match'] === etag) {
       res.status(304).end();
       return;
@@ -137,10 +161,12 @@ export default async function handler(req: ServerlessReq, res: ServerlessRes) {
     res.setHeader('ETag', etag);
     res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    if (method === 'HEAD') {
+      res.status(200).end();
+      return;
+    }
     res.send(buffer);
-  } catch (err) {
-    res.status(502).json({
-      error: err instanceof Error ? err.message : 'Unable to read cloud media.',
-    });
+  } catch {
+    res.status(502).json({ error: 'Unable to read cloud media.' });
   }
 }
