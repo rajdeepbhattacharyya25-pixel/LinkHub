@@ -38,6 +38,7 @@ export interface SeoAndGeoAuditResult {
 export const DEFAULT_PUBLIC_URL_SLUG = 'RajdeepBhattacharyya-LinkHub';
 export const DEFAULT_PUBLIC_URL_PATH = `/${DEFAULT_PUBLIC_URL_SLUG}`;
 export const DEFAULT_OG_LOGO_PATH = '/og-logo.jpg';
+export const DEFAULT_OG_SHARE_CARD_PATH = '/og-share-card.jpg';
 export const DEFAULT_FAVICON_SVG_PATH = '/favicon.svg';
 export const DEFAULT_PUBLIC_TITLE =
   'RajdeepBhattacharyya-LinkHub — Personal Portfolio & Link Studio';
@@ -189,8 +190,8 @@ export function resolveOgImageUrl(
 ): string {
   const cleanOrigin = resolveEffectiveOrigin(origin);
   return cleanOrigin
-    ? `${cleanOrigin}${DEFAULT_OG_LOGO_PATH}`
-    : DEFAULT_OG_LOGO_PATH;
+    ? `${cleanOrigin}${DEFAULT_OG_SHARE_CARD_PATH}`
+    : DEFAULT_OG_SHARE_CARD_PATH;
 }
 
 export function buildLandingSeoMetadata(
@@ -945,8 +946,8 @@ export function buildSeoHeadMarkup(
     `<meta property="og:image" content="${escapeHtml(meta.ogImage)}" />`,
     `<meta property="og:image:secure_url" content="${escapeHtml(meta.ogImage)}" />`,
     `<meta property="og:image:type" content="image/jpeg" />`,
-    `<meta property="og:image:width" content="1408" />`,
-    `<meta property="og:image:height" content="768" />`,
+    `<meta property="og:image:width" content="1200" />`,
+    `<meta property="og:image:height" content="630" />`,
     `<meta property="og:image:alt" content="${escapeHtml(meta.siteName)} — Brand Logo" />`,
     `<meta name="twitter:card" content="${escapeHtml(meta.twitterCard)}" />`,
     `<meta name="twitter:title" content="${escapeHtml(meta.title)}" />`,

@@ -106,7 +106,7 @@ test('buildLandingSeoMetadata formats optimal titles, descriptions, OG type, and
   assert.equal(emptyMeta.ogType, 'website');
   assert.equal(emptyMeta.canonicalUrl, 'https://devhub.example/RajdeepBhattacharyya-LinkHub');
   assert.equal(emptyMeta.siteName, 'RajdeepBhattacharyya-LinkHub');
-  assert.equal(emptyMeta.ogImage, 'https://devhub.example/og-logo.jpg');
+  assert.equal(emptyMeta.ogImage, 'https://devhub.example/og-share-card.jpg');
   assert.ok(emptyMeta.title.length >= 30 && emptyMeta.title.length <= 65);
   assert.ok(emptyMeta.description.length >= 110 && emptyMeta.description.length <= 160);
   assert.match(emptyMeta.robots, /^index, follow/);
@@ -214,7 +214,7 @@ test('injectSeoIntoHtml replaces SEO:HEAD markers safely and escapes script inje
     injected.includes('rel="canonical" href="https://devhub.example/RajdeepBhattacharyya-LinkHub"')
   );
   assert.ok(injected.includes('href="/favicon.svg"'));
-  assert.ok(injected.includes('content="https://devhub.example/og-logo.jpg"'));
+  assert.ok(injected.includes('content="https://devhub.example/og-share-card.jpg"'));
   assert.ok(injected.includes('<noscript><section'));
   assert.ok(injected.includes('EdgeCache TS'));
 });
@@ -283,7 +283,7 @@ test('resolvePublicMediaUrl and resolveOgImageUrl resolve relative /api/media pa
   };
   assert.equal(
     resolveOgImageUrl(withCloudMediaBanner, 'https://devhub.example'),
-    'https://devhub.example/og-logo.jpg'
+    'https://devhub.example/og-share-card.jpg'
   );
   const jsonLd = buildStructuredDataJsonLd(withCloudMediaBanner, 'https://devhub.example');
   const person = (jsonLd['@graph'] as Array<Record<string, unknown>>).find(

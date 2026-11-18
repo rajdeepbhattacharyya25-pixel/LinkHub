@@ -538,6 +538,7 @@ function buildAiProfileJson(data: PublicHubData, origin: string) {
       llmsFullTxt: `${origin}/llms-full.txt`,
       sitemapXml: `${origin}/sitemap.xml`,
       robotsTxt: `${origin}/robots.txt`,
+      ogShareCard: `${origin}/og-share-card.jpg`,
       ogCardSvg: `${origin}/og-card.svg`,
     },
     identity: {

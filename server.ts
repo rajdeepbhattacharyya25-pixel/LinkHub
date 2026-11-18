@@ -661,6 +661,18 @@ async function startServer() {
     res.status(404).end();
   });
 
+  app.get('/og-share-card.jpg', (_req: Request, res: Response) => {
+    const jpgPath = path.resolve(__dirname, 'public/og-share-card.jpg');
+    if (fs.existsSync(jpgPath)) {
+      res.setHeader('Content-Type', 'image/jpeg');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+      res.sendFile(jpgPath);
+      return;
+    }
+    res.status(404).end();
+  });
+
   if (!IS_PRODUCTION) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
