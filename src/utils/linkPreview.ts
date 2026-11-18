@@ -171,6 +171,129 @@ export function validatePreviewTargetUrl(
   }
 }
 
+const GITHUB_RESERVED_PATHS = new Set([
+  'features',
+  'orgs',
+  'topics',
+  'trending',
+  'collections',
+  'settings',
+  'marketplace',
+  'explore',
+  'sponsors',
+  'notifications',
+  'pulls',
+  'issues',
+  'login',
+  'signup',
+  'pricing',
+  'about',
+]);
+
+/**
+ * Resolves deterministic high-res OpenGraph preview images for well-known developer platforms
+ * (GitHub repositories/profiles, YouTube videos, etc.) without requiring HTML scraping.
+ */
+export function resolvePlatformPreviewImage(normalizedUrl: string): string | null {
+  try {
+    const parsed = new URL(normalizedUrl);
+    const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+    const segments = parsed.pathname
+      .split('/')
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    if (host === 'github.com') {
+      if (segments.length >= 2 && !GITHUB_RESERVED_PATHS.has(segments[0].toLowerCase())) {
+        const owner = segments[0].replace(/[^a-zA-Z0-9._-]/g, '');
+        const repo = segments[1].replace(/\.git$/i, '').replace(/[^a-zA-Z0-9._-]/g, '');
+        if (owner && repo) {
+          return `https://opengraph.githubassets.com/1/${owner}/${repo}`;
+        }
+      }
+      if (segments.length === 1 && !GITHUB_RESERVED_PATHS.has(segments[0].toLowerCase())) {
+        const user = segments[0].replace(/[^a-zA-Z0-9._-]/g, '');
+        if (user) {
+          return `https://github.com/${user}.png?size=600`;
+        }
+      }
+    }
+
+    if (host === 'youtube.com' || host === 'm.youtube.com') {
+      const v = parsed.searchParams.get('v') || '';
+      if (/^[a-zA-Z0-9_-]{11}$/.test(v)) {
+        return `https://i.ytimg.com/vi/${v}/hqdefault.jpg`;
+      }
+      if (segments[0] === 'shorts' && segments[1] && /^[a-zA-Z0-9_-]{11}$/.test(segments[1])) {
+        return `https://i.ytimg.com/vi/${segments[1]}/hqdefault.jpg`;
+      }
+    }
+
+    if (host === 'youtu.be' && segments[0] && /^[a-zA-Z0-9_-]{11}$/.test(segments[0])) {
+      return `https://i.ytimg.com/vi/${segments[0]}/hqdefault.jpg`;
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Builds a live rendered 16:9 website screenshot thumbnail URL for sites/SPAs
+ * that do not expose static OpenGraph <meta property="og:image"> tags.
+ */
+export function buildWebsiteScreenshotFallbackUrl(normalizedUrl: string): string | null {
+  const check = validatePreviewTargetUrl(normalizedUrl);
+  if (!check.valid || !check.normalizedUrl) return null;
+  return `https://image.thum.io/get/width/800/crop/450/noanimate/${check.normalizedUrl}`;
+}
+
+/**
+ * Derives a clean, human-readable card title from a URL when the user pastes a link
+ * without manually typing a title.
+ */
+export function deriveLinkTitleFromUrl(rawUrl: string, fetchedTitle?: string): string {
+  const cleanFetched = (fetchedTitle || '').trim();
+  if (cleanFetched) {
+    return cleanFetched.slice(0, 120);
+  }
+  const check = validatePreviewTargetUrl(rawUrl);
+  if (!check.valid || !check.normalizedUrl) {
+    return (rawUrl || '').trim().slice(0, 80) || 'Featured Link';
+  }
+  try {
+    const parsed = new URL(check.normalizedUrl);
+    const host = parsed.hostname.replace(/^www\./i, '');
+    const segments = parsed.pathname
+      .split('/')
+      .map((s) => decodeURIComponent(s).trim())
+      .filter(Boolean);
+
+    if (host.toLowerCase() === 'github.com' && segments.length >= 2) {
+      return `${segments[0]}/${segments[1].replace(/\.git$/i, '')}`.slice(0, 120);
+    }
+
+    const hostBase = host.split('.')[0] || host;
+    const humanizedHost = hostBase
+      .replace(/[-_]+/g, ' ')
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+
+    if (segments.length > 0) {
+      const lastSeg = segments[segments.length - 1]
+        .replace(/\.[a-z0-9]+$/i, '')
+        .replace(/[-_]+/g, ' ')
+        .replace(/\b\w/g, (c) => c.toUpperCase());
+      if (lastSeg && lastSeg.toLowerCase() !== humanizedHost.toLowerCase()) {
+        return `${humanizedHost} — ${lastSeg}`.slice(0, 120);
+      }
+    }
+    return (humanizedHost || host).slice(0, 120);
+  } catch {
+    return 'Featured Link';
+  }
+}
+
 function decodeHtmlEntities(input: string): string {
   return input
     .replace(/&amp;/gi, '&')
@@ -254,6 +377,10 @@ export function extractLinkPreviewMetadata(
     }
   }
 
+  if (!resolvedImageUrl) {
+    resolvedImageUrl = resolvePlatformPreviewImage(baseUrl);
+  }
+
   const titleMatch = headSlice.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i);
   const rawTitle =
     metaMap.get('og:title') ||
@@ -335,4 +462,170 @@ export class LinkPreviewMemoryCache {
   get size(): number {
     return this.store.size;
   }
+}
+
+const clientPreviewCache = new LinkPreviewMemoryCache({
+  maxEntries: 200,
+  hitTtlMs: 2 * 60 * 60 * 1000,
+  missTtlMs: 5 * 60 * 1000,
+});
+
+interface MicrolinkApiResponse {
+  status?: string;
+  data?: {
+    title?: string;
+    description?: string;
+    publisher?: string;
+    url?: string;
+    image?: { url?: string };
+    screenshot?: { url?: string };
+    logo?: { url?: string };
+  };
+}
+
+/**
+ * Queries the public CORS-enabled Microlink metadata + screenshot service.
+ * Works both from the browser (on static/serverless Vercel deployments) and from Node.js.
+ */
+export async function fetchLinkPreviewFromMicrolink(
+  normalizedUrl: string,
+  signal?: AbortSignal
+): Promise<Omit<LinkPreviewMetadata, 'cached'> | null> {
+  try {
+    // Use fast metadata-only mode (avoids slow headless browser screenshot stalls/timeouts)
+    const endpoint = `https://api.microlink.io/?url=${encodeURIComponent(
+      normalizedUrl
+    )}&meta=true`;
+    const res = await fetch(endpoint, {
+      method: 'GET',
+      signal: signal ?? AbortSignal.timeout(4500),
+      headers: {
+        Accept: 'application/json',
+      },
+    });
+    if (!res.ok) return null;
+    const contentType = (res.headers.get('content-type') || '').toLowerCase();
+    if (!contentType.includes('application/json')) return null;
+
+    const payload = (await res.json()) as MicrolinkApiResponse;
+    const d = payload?.data;
+    if (!d) return null;
+
+    const platformImg = resolvePlatformPreviewImage(normalizedUrl);
+    const rawCandidate =
+      d.image?.url ||
+      platformImg ||
+      d.screenshot?.url ||
+      d.logo?.url ||
+      null;
+
+    const resolvedImg = rawCandidate
+      ? resolveHttpAssetUrl(rawCandidate, normalizedUrl)
+      : null;
+
+    return {
+      ok: true,
+      found: Boolean(resolvedImg),
+      imageUrl: resolvedImg,
+      title: typeof d.title === 'string' && d.title.trim() ? d.title.trim().slice(0, 120) : undefined,
+      description:
+        typeof d.description === 'string' && d.description.trim()
+          ? d.description.trim().slice(0, 500)
+          : undefined,
+      siteName:
+        typeof d.publisher === 'string' && d.publisher.trim()
+          ? d.publisher.trim().slice(0, 80)
+          : undefined,
+      sourceUrl: typeof d.url === 'string' && d.url.trim() ? d.url.trim() : normalizedUrl,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Multi-tier website preview & thumbnail resolver that works across:
+ * 1) Local / Express / Vercel Serverless `/api/link-preview`
+ * 2) Direct CORS Microlink OpenGraph + live screenshot extraction
+ * 3) Platform-specific OG image resolvers (GitHub, YouTube) & live screenshot fallback
+ */
+export async function fetchLinkPreviewClientSide(
+  rawUrl: string,
+  signal?: AbortSignal
+): Promise<LinkPreviewMetadata | null> {
+  const check = validatePreviewTargetUrl(rawUrl);
+  if (!check.valid || !check.normalizedUrl) return null;
+  const normalizedUrl = check.normalizedUrl;
+
+  const cached = clientPreviewCache.get(normalizedUrl);
+  if (cached && cached.found && cached.imageUrl) {
+    return cached;
+  }
+
+  let partialTitle: string | undefined;
+  let partialDesc: string | undefined;
+  let partialSiteName: string | undefined;
+
+  // Tier 1: Try backend /api/link-preview (Express or Vercel Function)
+  try {
+    const res = await fetch(
+      `/api/link-preview?url=${encodeURIComponent(normalizedUrl)}`,
+      {
+        signal,
+        headers: { Accept: 'application/json' },
+      }
+    );
+    const contentType = (res.headers.get('content-type') || '').toLowerCase();
+    if (res.ok && contentType.includes('application/json')) {
+      const apiData = (await res.json()) as LinkPreviewMetadata;
+      partialTitle = apiData.title || partialTitle;
+      partialDesc = apiData.description || partialDesc;
+      partialSiteName = apiData.siteName || partialSiteName;
+      if (apiData.found && apiData.imageUrl) {
+        clientPreviewCache.set(normalizedUrl, apiData);
+        return apiData;
+      }
+    }
+  } catch (err) {
+    if (signal?.aborted) throw err;
+  }
+
+  if (signal?.aborted) return null;
+
+  // Tier 2: Try CORS-friendly Microlink OpenGraph + Screenshot API directly from browser
+  const microlinkData = await fetchLinkPreviewFromMicrolink(normalizedUrl, signal);
+  if (signal?.aborted) return null;
+
+  if (microlinkData) {
+    partialTitle = microlinkData.title || partialTitle;
+    partialDesc = microlinkData.description || partialDesc;
+    partialSiteName = microlinkData.siteName || partialSiteName;
+    if (microlinkData.found && microlinkData.imageUrl) {
+      const resolved: Omit<LinkPreviewMetadata, 'cached'> = {
+        ...microlinkData,
+        title: partialTitle,
+        description: partialDesc,
+        siteName: partialSiteName,
+      };
+      clientPreviewCache.set(normalizedUrl, resolved);
+      return { ...resolved, cached: false };
+    }
+  }
+
+  // Tier 3: Platform-specific OG image or deterministic live screenshot fallback
+  const fallbackImage =
+    resolvePlatformPreviewImage(normalizedUrl) ||
+    buildWebsiteScreenshotFallbackUrl(normalizedUrl);
+
+  const finalResult: Omit<LinkPreviewMetadata, 'cached'> = {
+    ok: true,
+    found: Boolean(fallbackImage),
+    imageUrl: fallbackImage,
+    title: partialTitle,
+    description: partialDesc,
+    siteName: partialSiteName,
+    sourceUrl: normalizedUrl,
+  };
+  clientPreviewCache.set(normalizedUrl, finalResult);
+  return { ...finalResult, cached: false };
 }

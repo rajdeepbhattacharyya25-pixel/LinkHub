@@ -34,6 +34,7 @@ import {
   triggerBrowserDownload,
   type MediaAssetCategory,
 } from '../utils/mediaAndZip';
+import { ensureClientMediaHydrated } from '../services/firebaseHubService';
 
 export interface CropUploadOptions {
   signal?: AbortSignal;
@@ -162,7 +163,7 @@ export const ImageCropModal: React.FC<ImageCropModalProps> = ({ session, onClose
     return () => window.removeEventListener('resize', updateSize);
   }, []);
 
-  // Load image from File or URL (with automatic SSRF-safe proxy fallback for remote URLs)
+  // Load image from File or URL (with Firestore publicMedia hydration + SSRF-safe proxy fallback)
   useEffect(() => {
     let cancelled = false;
     let objectUrlToRevoke: string | null = null;
@@ -200,6 +201,22 @@ export const ImageCropModal: React.FC<ImageCropModalProps> = ({ session, onClose
           throw new Error('No image selected. Choose an image file to crop and resize.');
         }
 
+        if (
+          rawUrl.startsWith('/api/media/') ||
+          (session.previousStoragePath || '').startsWith('firestore-media/')
+        ) {
+          const hydrated = await ensureClientMediaHydrated(rawUrl, session.previousStoragePath);
+          if (cancelled) return;
+          if (hydrated.startsWith('data:')) {
+            const img = await loadImgElement(hydrated, false);
+            if (cancelled) return;
+            setLoadedImage(img);
+            setResolvedPreviewSrc(hydrated);
+            setLoadingImage(false);
+            return;
+          }
+        }
+
         const isDataOrLocal =
           rawUrl.startsWith('data:') ||
           rawUrl.startsWith('blob:') ||
@@ -214,7 +231,7 @@ export const ImageCropModal: React.FC<ImageCropModalProps> = ({ session, onClose
           return;
         }
 
-        // Try direct CORS load first, then fall back to /api/image-proxy for external URLs
+        // Try direct CORS load first, then /api/image-proxy, then CORS image relay
         try {
           const directImg = await loadImgElement(rawUrl, true);
           if (cancelled) return;
@@ -223,12 +240,22 @@ export const ImageCropModal: React.FC<ImageCropModalProps> = ({ session, onClose
           setLoadingImage(false);
           return;
         } catch {
-          const proxyUrl = `/api/image-proxy?url=${encodeURIComponent(rawUrl)}`;
-          const proxiedImg = await loadImgElement(proxyUrl, true);
-          if (cancelled) return;
-          setLoadedImage(proxiedImg);
-          setResolvedPreviewSrc(proxyUrl);
-          setLoadingImage(false);
+          try {
+            const proxyUrl = `/api/image-proxy?url=${encodeURIComponent(rawUrl)}`;
+            const proxiedImg = await loadImgElement(proxyUrl, true);
+            if (cancelled) return;
+            setLoadedImage(proxiedImg);
+            setResolvedPreviewSrc(proxyUrl);
+            setLoadingImage(false);
+            return;
+          } catch {
+            const corsRelayUrl = `https://images.weserv.nl/?url=${encodeURIComponent(rawUrl)}`;
+            const relayImg = await loadImgElement(corsRelayUrl, true);
+            if (cancelled) return;
+            setLoadedImage(relayImg);
+            setResolvedPreviewSrc(corsRelayUrl);
+            setLoadingImage(false);
+          }
         }
       } catch (err) {
         if (cancelled) return;
@@ -249,7 +276,7 @@ export const ImageCropModal: React.FC<ImageCropModalProps> = ({ session, onClose
         URL.revokeObjectURL(objectUrlToRevoke);
       }
     };
-  }, [activeFile, activeSourceUrl]);
+  }, [activeFile, activeSourceUrl, session.previousStoragePath]);
 
   const activePreset = getCropPresetById(presetId);
   const activeAspectRatio = activePreset.ratio ?? freeAspectRatio;

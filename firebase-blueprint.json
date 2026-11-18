@@ -36,6 +36,10 @@
           "type": "array",
           "description": "Bounded list of up to 30 custom link categories"
         },
+        "links": {
+          "type": "array",
+          "description": "Bounded list of up to 50 public portfolio link cards mirrored in hub/public for atomic reads"
+        },
         "showGithubSection": {
           "type": "boolean"
         },

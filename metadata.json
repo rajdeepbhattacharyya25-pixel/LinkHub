@@ -1,6 +1,1 @@
-{
-  "name": "Link Hub — Personal Portfolio & Link Studio",
-  "description": "High-craft self-hosted personal link hub, portfolio card, interactive pass, Pantone Color Institute system design studio, and developer analytics workspace.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
+{"name":"Personal Link Hub","description":"High-craft self-hosted personal link hub, portfolio card, interactive pass, Pantone Color Institute system design studio, and developer analytics workspace.","requestFramePermissions":[],"majorCapabilities":["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]}

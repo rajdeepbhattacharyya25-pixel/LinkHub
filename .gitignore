@@ -9,3 +9,7 @@ coverage/
 .agents/
 .skills/
 .playwright-cli/
+.aistudio/
+.antigravity/
+.tempmediaStorage/
+.vscode/

@@ -94,51 +94,45 @@ export function sanitizeFirestoreId(raw: string, fallbackPrefix = 'item'): strin
 
 export function sanitizeHttpUrl(raw: string, fallback = 'https://example.com'): string {
   const trimmed = (raw || '').trim();
+  if (!trimmed) return fallback;
   const withProto = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
-  return withProto.slice(0, 1000) || fallback;
+  if (!/^https?:\/\/.+/.test(withProto) || withProto.length < 8) {
+    return fallback;
+  }
+  return withProto.slice(0, 1000);
 }
 
 const resolvedClientMediaCache = new Map<string, string>();
 const dataUriToMediaPathMap = new Map<string, string>();
 const inFlightClientMediaFetches = new Set<string>();
+let activeSaveCount = 0;
+let persistQueue: Promise<unknown> = Promise.resolve();
+
+function isFirestorePermissionDenied(err: unknown): boolean {
+  if (!err) return false;
+  if (typeof err === 'object' && 'code' in err) {
+    const code = String((err as { code?: unknown }).code || '').toLowerCase();
+    if (code === 'permission-denied' || code.includes('permission-denied')) {
+      return true;
+    }
+  }
+  const msg = err instanceof Error ? err.message : String(err);
+  return /permission[_ -]?denied|missing or insufficient permissions/i.test(msg);
+}
 
 function restoreCanonicalMediaUrl(rawUrl?: string, storagePath?: string): string {
   const clean = (rawUrl || '').trim();
   if (!clean) return '';
   const mapped = dataUriToMediaPathMap.get(clean);
   if (mapped) return mapped;
-  if (clean.startsWith('data:image/') && storagePath) {
+  if (storagePath) {
     const mediaId = extractFirestoreMediaId(storagePath);
     if (mediaId) return `/api/media/${mediaId}`;
   }
+  if (clean.startsWith('data:image/') && clean.length > 2000) {
+    return '';
+  }
   return clean;
-}
-
-export function sanitizeHubPublicData(config: SiteConfigState, ownerUid: string) {
-  const sanitizedProfile = {
-    ...config.profile,
-    avatarUrl: restoreCanonicalMediaUrl(config.profile.avatarUrl, config.profile.avatarPath),
-    bannerImageUrl: restoreCanonicalMediaUrl(
-      config.profile.bannerImageUrl,
-      config.profile.bannerImagePath
-    ),
-  };
-  return {
-    ownerUid: sanitizeFirestoreId(ownerUid, 'owner'),
-    profile: sanitizedProfile,
-    designSystem: config.designSystem,
-    featuredSong: config.featuredSong,
-    socials: (config.socials || []).slice(0, 20),
-    posts: (config.posts || []).slice(0, 100),
-    customCategories: (config.customCategories || [])
-      .map((c) => sanitizeCategoryEntry(c))
-      .filter(Boolean)
-      .slice(0, 30),
-    showGithubSection: Boolean(config.showGithubSection),
-    showSongCard: Boolean(config.showSongCard),
-    showMapCard: Boolean(config.showMapCard),
-    showContactSection: Boolean(config.showContactSection),
-  };
 }
 
 export function sanitizeLinkPayload(
@@ -177,6 +171,38 @@ export function sanitizeLinkPayload(
     clicks: Math.max(0, Math.round(Number(link.clicks) || 0)),
     isPublic: true,
     ownerUid: sanitizeFirestoreId(ownerUid, 'owner'),
+  };
+}
+
+export function sanitizeHubPublicData(config: SiteConfigState, ownerUid: string) {
+  const sanitizedProfile = {
+    ...config.profile,
+    avatarUrl: restoreCanonicalMediaUrl(config.profile.avatarUrl, config.profile.avatarPath),
+    bannerImageUrl: restoreCanonicalMediaUrl(
+      config.profile.bannerImageUrl,
+      config.profile.bannerImagePath
+    ),
+  };
+  const sanitizedLinks = (config.links || [])
+    .slice(0, 50)
+    .map((lnk, idx) => sanitizeLinkPayload(lnk, idx, ownerUid));
+
+  return {
+    ownerUid: sanitizeFirestoreId(ownerUid, 'owner'),
+    profile: sanitizedProfile,
+    designSystem: config.designSystem,
+    featuredSong: config.featuredSong,
+    socials: (config.socials || []).slice(0, 20),
+    posts: (config.posts || []).slice(0, 100),
+    customCategories: (config.customCategories || [])
+      .map((c) => sanitizeCategoryEntry(c))
+      .filter(Boolean)
+      .slice(0, 30),
+    links: sanitizedLinks,
+    showGithubSection: Boolean(config.showGithubSection),
+    showSongCard: Boolean(config.showSongCard),
+    showMapCard: Boolean(config.showMapCard),
+    showContactSection: Boolean(config.showContactSection),
   };
 }
 
@@ -298,6 +324,44 @@ function resolveMediaUrlFromCache(rawUrl?: string): string {
   return resolvedClientMediaCache.get(clean) || clean;
 }
 
+/**
+ * Resolves a `/api/media/:mediaId` URL directly from Firestore `publicMedia/{mediaId}`
+ * into a `data:image/...;base64,...` URI so cropping & rendering work even on static hosts.
+ */
+export async function ensureClientMediaHydrated(
+  rawUrl?: string,
+  storagePath?: string
+): Promise<string> {
+  const canonical = restoreCanonicalMediaUrl(rawUrl, storagePath);
+  const clean = (rawUrl || '').trim();
+  const target = canonical.startsWith('/api/media/') ? canonical : clean;
+  if (!target.startsWith('/api/media/')) return clean;
+
+  const cached = resolvedClientMediaCache.get(target);
+  if (cached) return cached;
+
+  const mediaId = target.replace(/^\/api\/media\//, '').split(/[?#]/)[0].trim();
+  if (!mediaId) return clean;
+
+  try {
+    const snap = await getDoc(doc(db, 'publicMedia', mediaId));
+    if (snap.exists()) {
+      const data = snap.data();
+      const mimeType = typeof data.mimeType === 'string' ? data.mimeType.trim() : 'image/webp';
+      const dataBase64 = typeof data.dataBase64 === 'string' ? data.dataBase64.trim() : '';
+      if (dataBase64) {
+        const dataUri = `data:${mimeType};base64,${dataBase64}`;
+        resolvedClientMediaCache.set(target, dataUri);
+        dataUriToMediaPathMap.set(dataUri, target);
+        return dataUri;
+      }
+    }
+  } catch {
+    // Fallback to rawUrl
+  }
+  return clean;
+}
+
 async function hydrateFirestoreMediaUrl(
   rawUrl: string | undefined,
   onResolved: () => void
@@ -339,9 +403,14 @@ export function subscribePublicHubAndLinks(callbacks: {
   let latestHubDoc: Partial<SiteConfigState> | null = null;
   let latestLinks: LinkCardItem[] | null = null;
   let hubSeeded = false;
+  let hubSnapReceived = false;
   let cloudLinkIds: string[] = [];
 
   const emitCombined = () => {
+    if (!hubSnapReceived || activeSaveCount > 0) {
+      return;
+    }
+
     const legacyDemoDetected = isUntouchedLegacyDemoHub(latestHubDoc);
     const effectiveHubDoc = legacyDemoDetected ? null : latestHubDoc;
     const effectiveHubSeeded = hubSeeded && !legacyDemoDetected;
@@ -349,11 +418,18 @@ export function subscribePublicHubAndLinks(callbacks: {
     const base = effectiveHubDoc
       ? normalizeSiteConfig(effectiveHubDoc)
       : DEFAULT_SITE_CONFIG;
-    const linksToUse =
+
+    const collectionLinks =
       latestLinks !== null
         ? legacyDemoDetected
           ? latestLinks.filter((lnk) => !LEGACY_DEMO_LINK_IDS.has(lnk.id))
           : latestLinks
+        : null;
+
+    // Prefer /links collection documents when present; fall back to base.links mirrored in hub/public
+    const linksToUse =
+      collectionLinks && collectionLinks.length > 0
+        ? collectionLinks
         : base.links;
 
     // Trigger background Firestore hydration for any /api/media/:id URLs (ensures Vercel static compatibility)
@@ -390,6 +466,7 @@ export function subscribePublicHubAndLinks(callbacks: {
   const unsubHub = onSnapshot(
     doc(db, 'hub', 'public'),
     (snap) => {
+      hubSnapReceived = true;
       hubSeeded = snap.exists();
       latestHubDoc = snap.exists() ? (snap.data() as Partial<SiteConfigState>) : null;
       emitCombined();
@@ -450,68 +527,98 @@ export async function persistFullHubToFirestore(params: {
   ownerUid: string;
   knownCloudLinkIds: string[];
 }): Promise<string[]> {
-  const { siteConfig, ownerUid, knownCloudLinkIds } = params;
-  const hubRef = doc(db, 'hub', 'public');
-  const hubPayload = sanitizeHubPublicData(siteConfig, ownerUid);
+  const executePersist = async (): Promise<string[]> => {
+    const { siteConfig, ownerUid, knownCloudLinkIds } = params;
+    const hubRef = doc(db, 'hub', 'public');
+    const hubPayload = sanitizeHubPublicData(siteConfig, ownerUid);
 
-  try {
-    const existingHub = await getDoc(hubRef);
-    if (!existingHub.exists()) {
-      await setDoc(hubRef, {
-        ...hubPayload,
-        updatedAt: serverTimestamp(),
-      });
-    } else {
-      const { ownerUid: _immutableOwner, ...updatableHubFields } = hubPayload;
-      await updateDoc(hubRef, {
-        ...updatableHubFields,
-        updatedAt: serverTimestamp(),
-      });
-    }
-  } catch (err) {
-    handleFirestoreError(err, OperationType.WRITE, 'hub/public');
-  }
-
-  const nextIds: string[] = [];
-  for (let i = 0; i < siteConfig.links.length; i++) {
-    const sanitized = sanitizeLinkPayload(siteConfig.links[i], i, ownerUid);
-    nextIds.push(sanitized.id);
-    const linkRef = doc(db, 'links', sanitized.id);
+    activeSaveCount += 1;
     try {
-      const existingLink = await getDoc(linkRef);
-      if (!existingLink.exists()) {
-        await setDoc(linkRef, {
-          ...sanitized,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
-      } else {
-        const {
-          id: _id,
-          ownerUid: _ownerUid,
-          ...updatableLinkFields
-        } = sanitized;
-        await updateDoc(linkRef, {
-          ...updatableLinkFields,
-          updatedAt: serverTimestamp(),
-        });
+      const nextIds: string[] = [];
+      for (let i = 0; i < siteConfig.links.length; i++) {
+        const sanitized = sanitizeLinkPayload(siteConfig.links[i], i, ownerUid);
+        nextIds.push(sanitized.id);
+        const linkRef = doc(db, 'links', sanitized.id);
+        try {
+          const existingLink = await getDoc(linkRef);
+          if (!existingLink.exists()) {
+            await setDoc(linkRef, {
+              ...sanitized,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+          } else {
+            const {
+              id: _id,
+              ownerUid: _ownerUid,
+              ...updatableLinkFields
+            } = sanitized;
+            await updateDoc(linkRef, {
+              ...updatableLinkFields,
+              updatedAt: serverTimestamp(),
+            });
+          }
+        } catch (err) {
+          handleFirestoreError(err, OperationType.WRITE, `links/${sanitized.id}`);
+        }
       }
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `links/${sanitized.id}`);
-    }
-  }
 
-  for (const oldId of knownCloudLinkIds) {
-    if (!nextIds.includes(oldId)) {
+      for (const oldId of knownCloudLinkIds) {
+        if (!nextIds.includes(oldId)) {
+          try {
+            await deleteDoc(doc(db, 'links', oldId));
+          } catch (err) {
+            handleFirestoreError(err, OperationType.DELETE, `links/${oldId}`);
+          }
+        }
+      }
+
+      const writeHubDoc = async (includeLinksMirror: boolean) => {
+        const payloadToWrite = includeLinksMirror
+          ? hubPayload
+          : (({ links: _omitLinks, ...rest }) => rest)(hubPayload);
+
+        const existingHub = await getDoc(hubRef);
+        if (!existingHub.exists()) {
+          await setDoc(hubRef, {
+            ...payloadToWrite,
+            updatedAt: serverTimestamp(),
+          });
+        } else {
+          const { ownerUid: _immutableOwner, ...updatableHubFields } = payloadToWrite;
+          await updateDoc(hubRef, {
+            ...updatableHubFields,
+            updatedAt: serverTimestamp(),
+          });
+        }
+      };
+
       try {
-        await deleteDoc(doc(db, 'links', oldId));
+        await writeHubDoc(true);
       } catch (err) {
-        handleFirestoreError(err, OperationType.DELETE, `links/${oldId}`);
+        // Fallback when deployed Firestore security rules disallow the optional `links` mirror on hub/public:
+        // /links/{linkId} documents are already persisted above, so retry hub/public without `links`.
+        if (isFirestorePermissionDenied(err)) {
+          try {
+            await writeHubDoc(false);
+          } catch (fallbackErr) {
+            handleFirestoreError(fallbackErr, OperationType.WRITE, 'hub/public');
+          }
+        } else {
+          handleFirestoreError(err, OperationType.WRITE, 'hub/public');
+        }
       }
-    }
-  }
 
-  return nextIds;
+      return nextIds;
+    } finally {
+      activeSaveCount = Math.max(0, activeSaveCount - 1);
+    }
+  };
+
+  // Serialize writes so rapid add-link + auto-preview updates never race on the same doc
+  const queued = persistQueue.then(executePersist, executePersist);
+  persistQueue = queued.catch(() => {});
+  return queued;
 }
 
 let storageBucketUnavailableUntilMs = 0;

@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import QRCode from 'qrcode';
+import publicConfigHandler from '../../api/public-config';
+import seoHandler from '../../api/seo';
 import { DEFAULT_SITE_CONFIG, type SiteConfigState } from '../data/profileData';
 import {
   auditSeoAndAiDiscoverability,
@@ -287,4 +290,104 @@ test('resolvePublicMediaUrl and resolveOgImageUrl resolve relative /api/media pa
     (n) => n['@type'] === 'Person'
   );
   assert.equal(person?.image, 'https://devhub.example/api/media/med-avatar-111');
+});
+
+test('Vercel api/public-config serves both public-config and health modes cleanly', () => {
+  const createMockRes = () => {
+    let statusCode = 200;
+    let body: unknown = null;
+    const headers: Record<string, string> = {};
+    const res = {
+      status(code: number) {
+        statusCode = code;
+        return res;
+      },
+      setHeader(name: string, value: string) {
+        headers[name.toLowerCase()] = value;
+      },
+      json(data: unknown) {
+        body = data;
+      },
+      getResult: () => ({ statusCode, body, headers }),
+    };
+    return res;
+  };
+
+  const healthRes = createMockRes();
+  publicConfigHandler({ url: '/api/public-config?mode=health' }, healthRes);
+  assert.equal(healthRes.getResult().statusCode, 200);
+  assert.equal((healthRes.getResult().body as { ok?: boolean })?.ok, true);
+
+  const cfgRes = createMockRes();
+  publicConfigHandler({ url: '/api/public-config' }, cfgRes);
+  assert.equal(cfgRes.getResult().statusCode, 200);
+  assert.equal(typeof (cfgRes.getResult().body as { mapsApiKey?: unknown })?.mapsApiKey, 'string');
+});
+
+test('Vercel api/seo serves robots, sitemap, llms, llms-full, ai-profile, and og-card', async () => {
+  const createMockRes = () => {
+    let statusCode = 200;
+    let body: unknown = null;
+    const headers: Record<string, string> = {};
+    const res = {
+      status(code: number) {
+        statusCode = code;
+        return res;
+      },
+      setHeader(name: string, value: string) {
+        headers[name.toLowerCase()] = value;
+      },
+      json(data: unknown) {
+        body = data;
+      },
+      send(text: string) {
+        body = text;
+      },
+      getResult: () => ({ statusCode, body, headers }),
+    };
+    return res;
+  };
+
+  const reqBase = { headers: { host: 'rajdeepbhattacharyya-linkhub.vercel.app', 'x-forwarded-proto': 'https' } };
+
+  const robotsRes = createMockRes();
+  await seoHandler({ ...reqBase, query: { type: 'robots' } }, robotsRes);
+  assert.equal(robotsRes.getResult().statusCode, 200);
+  assert.ok(String(robotsRes.getResult().body).includes('Sitemap: https://rajdeepbhattacharyya-linkhub.vercel.app/sitemap.xml'));
+
+  const sitemapRes = createMockRes();
+  await seoHandler({ ...reqBase, query: { type: 'sitemap' } }, sitemapRes);
+  assert.equal(sitemapRes.getResult().statusCode, 200);
+  assert.ok(String(sitemapRes.getResult().body).includes('<urlset'));
+
+  const llmsRes = createMockRes();
+  await seoHandler({ ...reqBase, query: { type: 'llms' } }, llmsRes);
+  assert.equal(llmsRes.getResult().statusCode, 200);
+  assert.ok(String(llmsRes.getResult().body).includes('/RajdeepBhattacharyya-LinkHub'));
+
+  const profileRes = createMockRes();
+  await seoHandler({ ...reqBase, query: { type: 'ai-profile' } }, profileRes);
+  assert.equal(profileRes.getResult().statusCode, 200);
+  assert.equal(
+    (profileRes.getResult().body as { canonicalUrl?: string })?.canonicalUrl,
+    'https://rajdeepbhattacharyya-linkhub.vercel.app/RajdeepBhattacharyya-LinkHub'
+  );
+
+  const ogRes = createMockRes();
+  await seoHandler({ ...reqBase, query: { type: 'og-card' } }, ogRes);
+  assert.equal(ogRes.getResult().statusCode, 200);
+  assert.ok(String(ogRes.getResult().body).includes('<svg'));
+});
+
+test('ISO/IEC 18004 QR code generator produces valid scannable finder patterns for hub URL', () => {
+  const qr = QRCode.create('https://rajdeepbhattacharyya-linkhub.vercel.app/RajdeepBhattacharyya-LinkHub', {
+    errorCorrectionLevel: 'M',
+  });
+  const size = qr.modules.size;
+  assert.ok(size >= 29, `Expected standard QR size >= 29 for full URL, got ${size}`);
+  // Verify top-left 7x7 finder outer border corner (0,0) and center (3,3) are dark modules
+  assert.equal(Boolean(qr.modules.data[0]), true);
+  assert.equal(Boolean(qr.modules.data[3 * size + 3]), true);
+  // Verify top-right finder outer corner
+  assert.equal(Boolean(qr.modules.data[size - 1]), true);
 });

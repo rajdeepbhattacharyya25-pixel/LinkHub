@@ -63,6 +63,8 @@ import {
   type AdminWorkspaceGroupId,
 } from '../utils/hubLogic';
 import {
+  deriveLinkTitleFromUrl,
+  fetchLinkPreviewClientSide,
   resolveCardPreviewDisplay,
   validatePreviewTargetUrl,
   type LinkPreviewMetadata,
@@ -168,7 +170,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
   gmpQuotaExceeded = false,
   onToggleBiometricLock,
   onLockStudio,
-  onUpdateConfig,
+  onUpdateConfig: commitLocalConfig,
   onUpdateKnownCloudLinkIds,
   onDeleteMessage,
   onToggleMessageRead,
@@ -177,6 +179,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<AdminTab>('profile');
   const [saveNotice, setSaveNotice] = useState<string | null>(null);
+  const [cloudSyncError, setCloudSyncError] = useState<string | null>(null);
   const [uploadingSlot, setUploadingSlot] = useState<string | null>(null);
   const [cropSession, setCropSession] = useState<CropSessionRequest | null>(null);
   const [savingToCloud, setSavingToCloud] = useState(false);
@@ -205,11 +208,15 @@ export const AdminPage: React.FC<AdminPageProps> = ({
   const [newLinkPinned, setNewLinkPinned] = useState(false);
   const [fetchingLinkIds, setFetchingLinkIds] = useState<Record<string, boolean>>({});
   const lastFetchedNewUrlRef = useRef<string>('');
+  const newLinkFetchedMetaRef = useRef<{ title?: string; description?: string }>({});
   const existingUrlDebounceTimersRef = useRef<Record<string, number>>({});
+  const cloudAutoSaveTimerRef = useRef<number | null>(null);
   const linksRef = useRef<LinkCardItem[]>(config.links);
   linksRef.current = config.links;
   const configRef = useRef<SiteConfigState>(config);
   configRef.current = config;
+  const knownCloudLinkIdsRef = useRef<string[]>(knownCloudLinkIds);
+  knownCloudLinkIdsRef.current = knownCloudLinkIds;
 
   // New Social form state
   const [newSocialPlatform, setNewSocialPlatform] = useState<SocialPlatform>('x');
@@ -243,19 +250,85 @@ export const AdminPage: React.FC<AdminPageProps> = ({
     }, 2800);
   };
 
+  const persistConfigToCloudNow = async (
+    nextConfig: SiteConfigState,
+    successMsg?: string
+  ): Promise<boolean> => {
+    if (cloudAutoSaveTimerRef.current) {
+      window.clearTimeout(cloudAutoSaveTimerRef.current);
+      cloudAutoSaveTimerRef.current = null;
+    }
+    configRef.current = nextConfig;
+    commitLocalConfig(nextConfig);
+    if (!ownerUid) {
+      if (successMsg) triggerSavedBanner(successMsg);
+      return true;
+    }
+    setSavingToCloud(true);
+    try {
+      const nextCloudIds = await persistFullHubToFirestore({
+        siteConfig: nextConfig,
+        ownerUid,
+        knownCloudLinkIds: knownCloudLinkIdsRef.current,
+      });
+      knownCloudLinkIdsRef.current = nextCloudIds;
+      onUpdateKnownCloudLinkIds(nextCloudIds);
+      setCloudSyncError(null);
+      if (successMsg) {
+        triggerSavedBanner(successMsg);
+      }
+      return true;
+    } catch (err) {
+      const rawMsg = err instanceof Error ? err.message : 'Failed to sync changes to Firestore';
+      let friendlyMsg = rawMsg;
+      try {
+        const parsed = JSON.parse(rawMsg) as { error?: string; path?: string };
+        if (parsed?.error) {
+          friendlyMsg = parsed.path ? `${parsed.path}: ${parsed.error}` : parsed.error;
+        }
+      } catch {
+        // plain message
+      }
+      setCloudSyncError(friendlyMsg);
+      return false;
+    } finally {
+      setSavingToCloud(false);
+    }
+  };
+
+  const scheduleCloudAutoSave = (nextConfig: SiteConfigState) => {
+    configRef.current = nextConfig;
+    commitLocalConfig(nextConfig);
+    if (!ownerUid) return;
+    if (cloudAutoSaveTimerRef.current) {
+      window.clearTimeout(cloudAutoSaveTimerRef.current);
+    }
+    cloudAutoSaveTimerRef.current = window.setTimeout(() => {
+      cloudAutoSaveTimerRef.current = null;
+      void persistConfigToCloudNow(configRef.current);
+    }, 900);
+  };
+
+  // Route all studio state updates (Profile, Map, Media, Visibility, GitHub, Song, Pantone)
+  // through debounced Cloud Firestore auto-save so no edits are ever lost on refresh.
+  const onUpdateConfig = (nextConfig: SiteConfigState) => {
+    scheduleCloudAutoSave(nextConfig);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (cloudAutoSaveTimerRef.current) {
+        window.clearTimeout(cloudAutoSaveTimerRef.current);
+      }
+    };
+  }, []);
+
   const requestWebsitePreview = async (
     rawUrl: string,
     signal?: AbortSignal
   ): Promise<LinkPreviewMetadata | null> => {
-    const check = validatePreviewTargetUrl(rawUrl);
-    if (!check.valid || !check.normalizedUrl) return null;
     try {
-      const res = await fetch(
-        `/api/link-preview?url=${encodeURIComponent(check.normalizedUrl)}`,
-        { signal }
-      );
-      if (!res.ok) return null;
-      return (await res.json()) as LinkPreviewMetadata;
+      return await fetchLinkPreviewClientSide(rawUrl, signal);
     } catch {
       return null;
     }
@@ -268,6 +341,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
       if (!newLinkUrl.trim()) {
         setNewLinkAutoThumbnailUrl('');
         lastFetchedNewUrlRef.current = '';
+        newLinkFetchedMetaRef.current = {};
       }
       return;
     }
@@ -283,9 +357,19 @@ export const AdminPage: React.FC<AdminPageProps> = ({
       const data = await requestWebsitePreview(targetUrl, controller.signal);
       if (controller.signal.aborted) return;
       lastFetchedNewUrlRef.current = targetUrl;
+      newLinkFetchedMetaRef.current = {
+        title: data?.title,
+        description: data?.description,
+      };
       setNewLinkAutoThumbnailUrl(data?.found && data.imageUrl ? data.imageUrl : '');
+      if (data?.title) {
+        setNewLinkTitle((prev) => (prev.trim() ? prev : data.title!));
+      }
+      if (data?.description) {
+        setNewLinkDesc((prev) => (prev.trim() ? prev : data.description!));
+      }
       setNewLinkPreviewFetching(false);
-    }, 450);
+    }, 350);
 
     return () => {
       window.clearTimeout(timer);
@@ -303,7 +387,17 @@ export const AdminPage: React.FC<AdminPageProps> = ({
     lastFetchedNewUrlRef.current = '';
     const data = await requestWebsitePreview(check.normalizedUrl);
     lastFetchedNewUrlRef.current = check.normalizedUrl;
+    newLinkFetchedMetaRef.current = {
+      title: data?.title,
+      description: data?.description,
+    };
     setNewLinkAutoThumbnailUrl(data?.found && data.imageUrl ? data.imageUrl : '');
+    if (data?.title) {
+      setNewLinkTitle((prev) => (prev.trim() ? prev : data.title!));
+    }
+    if (data?.description) {
+      setNewLinkDesc((prev) => (prev.trim() ? prev : data.description!));
+    }
     setNewLinkPreviewFetching(false);
     triggerSavedBanner(
       data?.found && data.imageUrl
@@ -322,12 +416,21 @@ export const AdminPage: React.FC<AdminPageProps> = ({
     setFetchingLinkIds((prev) => ({ ...prev, [linkId]: false }));
     const nextAutoUrl = data?.found && data.imageUrl ? data.imageUrl : '';
     const latestConfig = configRef.current;
-    onUpdateConfig({
+    const nextConfig: SiteConfigState = {
       ...latestConfig,
-      links: latestConfig.links.map((item) =>
-        item.id === linkId ? { ...item, autoThumbnailUrl: nextAutoUrl } : item
-      ),
-    });
+      links: latestConfig.links.map((item) => {
+        if (item.id !== linkId) return item;
+        const shouldFillDesc =
+          (!item.description || item.description === 'Featured resource link.') &&
+          Boolean(data?.description);
+        return {
+          ...item,
+          autoThumbnailUrl: nextAutoUrl,
+          description: shouldFillDesc ? data!.description! : item.description,
+        };
+      }),
+    };
+    await persistConfigToCloudNow(nextConfig);
   };
 
   const scheduleSavedLinkPreviewFetch = (linkId: string, rawUrl: string) => {
@@ -866,29 +969,124 @@ export const AdminPage: React.FC<AdminPageProps> = ({
     });
   };
 
-  const handleExplicitSave = async () => {
-    setSavingToCloud(true);
-    try {
-      const nextCloudIds = await persistFullHubToFirestore({
-        siteConfig: config,
-        ownerUid,
-        knownCloudLinkIds,
-      });
-      onUpdateKnownCloudLinkIds(nextCloudIds);
-      triggerSavedBanner('Synced live to Cloud Firestore');
-    } catch (err) {
-      triggerSavedBanner(
-        err instanceof Error ? err.message : 'Failed to sync changes to Firestore'
-      );
-    } finally {
-      setSavingToCloud(false);
-    }
-  };
-
   const availableCategories = extractAvailableCategories(
     config.links,
     config.customCategories || []
   );
+
+  const buildDraftNewLinkResult = (
+    baseConfig: SiteConfigState
+  ): {
+    nextConfig: SiteConfigState;
+    createdItem: LinkCardItem;
+    resolvedCategory: string;
+  } | null => {
+    if (!newLinkUrl.trim()) return null;
+    const cleanUrl = /^https?:\/\//i.test(newLinkUrl.trim())
+      ? newLinkUrl.trim()
+      : `https://${newLinkUrl.trim()}`;
+
+    const cats = extractAvailableCategories(
+      baseConfig.links,
+      baseConfig.customCategories || []
+    );
+    const activeFallback = cats[0]?.id || 'project';
+    let resolvedCategory = cats.some((c) => c.id === newLinkCategory)
+      ? newLinkCategory
+      : activeFallback;
+    let nextCustomCategories = baseConfig.customCategories || [];
+
+    if (creatingNewLinkCategory && newLinkCustomCategoryInput.trim()) {
+      const added = addOrRestoreCategoryEntry(
+        nextCustomCategories,
+        newLinkCustomCategoryInput
+      );
+      if (added.categoryId) {
+        resolvedCategory = added.categoryId;
+        nextCustomCategories = added.nextCustomCategories;
+      }
+    }
+
+    const resolvedTitle =
+      newLinkTitle.trim() ||
+      deriveLinkTitleFromUrl(cleanUrl, newLinkFetchedMetaRef.current?.title);
+    const resolvedDesc =
+      newLinkDesc.trim() ||
+      newLinkFetchedMetaRef.current?.description ||
+      'Featured resource link.';
+
+    const item: LinkCardItem = {
+      id: `link-${Date.now()}`,
+      title: resolvedTitle,
+      url: cleanUrl,
+      displayUrl: newLinkDisplayUrl.trim() || cleanUrl.replace(/^https?:\/\//, ''),
+      description: resolvedDesc,
+      pinned: newLinkPinned,
+      category: resolvedCategory,
+      previewType: newLinkPreview,
+      thumbnailUrl: newLinkThumbnailUrl.trim(),
+      autoThumbnailUrl: newLinkAutoThumbnailUrl.trim(),
+      thumbnailPath: newLinkThumbnailPath,
+      galleryUrls: [],
+      clicks: 0,
+    };
+
+    return {
+      nextConfig: {
+        ...baseConfig,
+        customCategories: nextCustomCategories,
+        links: [item, ...baseConfig.links],
+      },
+      createdItem: item,
+      resolvedCategory,
+    };
+  };
+
+  const resetNewLinkFormState = (nextCategory: string) => {
+    setNewLinkTitle('');
+    setNewLinkUrl('');
+    setNewLinkDisplayUrl('');
+    setNewLinkDesc('');
+    setNewLinkCategory(nextCategory);
+    setCreatingNewLinkCategory(false);
+    setNewLinkCustomCategoryInput('');
+    setNewLinkPreview('auto');
+    setNewLinkThumbnailUrl('');
+    setNewLinkAutoThumbnailUrl('');
+    lastFetchedNewUrlRef.current = '';
+    newLinkFetchedMetaRef.current = {};
+    setNewLinkThumbnailPath('');
+    setNewLinkPinned(false);
+    setShowAddLinkForm(false);
+  };
+
+  const handleExplicitSave = async () => {
+    let configToSave = configRef.current;
+    let newlyCommittedLink: LinkCardItem | null = null;
+
+    const draftResult = buildDraftNewLinkResult(configToSave);
+    if (draftResult) {
+      configToSave = draftResult.nextConfig;
+      newlyCommittedLink = draftResult.createdItem;
+      resetNewLinkFormState(draftResult.resolvedCategory);
+      setExpandedLinkIds((prev) => ({ ...prev, [ draftResult.createdItem.id]: true }));
+    }
+
+    await persistConfigToCloudNow(
+      configToSave,
+      newlyCommittedLink
+        ? `Added "${newlyCommittedLink.title}" & synced to Cloud Firestore`
+        : 'Synced live to Cloud Firestore'
+    );
+
+    if (
+      newlyCommittedLink &&
+      newlyCommittedLink.previewType === 'auto' &&
+      !newlyCommittedLink.autoThumbnailUrl
+    ) {
+      void fetchPreviewForSavedLink(newlyCommittedLink.id, newlyCommittedLink.url);
+    }
+  };
 
   const registerCustomCategory = (rawName: string): string | null => {
     const result = addOrRestoreCategoryEntry(
@@ -896,10 +1094,11 @@ export const AdminPage: React.FC<AdminPageProps> = ({
       rawName
     );
     if (!result.categoryId) return null;
-    onUpdateConfig({
+    const nextConfig: SiteConfigState = {
       ...config,
       customCategories: result.nextCustomCategories,
-    });
+    };
+    void persistConfigToCloudNow(nextConfig);
     return result.categoryId;
   };
 
@@ -914,17 +1113,18 @@ export const AdminPage: React.FC<AdminPageProps> = ({
       return;
     }
 
-    onUpdateConfig({
+    const nextConfig: SiteConfigState = {
       ...config,
       customCategories: result.nextCustomCategories,
       links: result.nextLinks,
-    });
+    };
     if (normalizeCategoryId(newLinkCategory) === normalizeCategoryId(catId)) {
       setNewLinkCategory(result.fallbackCategoryId);
     }
     const label = formatCategorySingularLabel(catId);
     const fallbackLabel = formatCategorySingularLabel(result.fallbackCategoryId);
-    triggerSavedBanner(
+    void persistConfigToCloudNow(
+      nextConfig,
       result.reassignedCount > 0
         ? `Removed "${label}" (${result.reassignedCount} link moved to ${fallbackLabel})`
         : `Removed category "${label}"`
@@ -932,96 +1132,63 @@ export const AdminPage: React.FC<AdminPageProps> = ({
   };
 
   // Link handlers
-  const handleAddLink = (e: React.FormEvent) => {
+  const handleAddLink = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newLinkTitle.trim() || !newLinkUrl.trim()) return;
-    const cleanUrl = newLinkUrl.trim().startsWith('http')
-      ? newLinkUrl.trim()
-      : `https://${newLinkUrl.trim()}`;
-
-    const activeFallback = availableCategories[0]?.id || 'project';
-    let resolvedCategory = availableCategories.some((c) => c.id === newLinkCategory)
-      ? newLinkCategory
-      : activeFallback;
-    let nextCustomCategories = config.customCategories || [];
-    if (creatingNewLinkCategory && newLinkCustomCategoryInput.trim()) {
-      const added = addOrRestoreCategoryEntry(
-        nextCustomCategories,
-        newLinkCustomCategoryInput
-      );
-      if (added.categoryId) {
-        resolvedCategory = added.categoryId;
-        nextCustomCategories = added.nextCustomCategories;
-      }
+    if (!newLinkUrl.trim()) {
+      triggerSavedBanner('Paste a link URL (https://...) first');
+      return;
     }
 
-    const item: LinkCardItem = {
-      id: `link-${Date.now()}`,
-      title: newLinkTitle.trim(),
-      url: cleanUrl,
-      displayUrl: newLinkDisplayUrl.trim() || cleanUrl.replace(/^https?:\/\//, ''),
-      description: newLinkDesc.trim() || 'Featured resource link.',
-      pinned: newLinkPinned,
-      category: resolvedCategory,
-      previewType: newLinkPreview,
-      thumbnailUrl: newLinkThumbnailUrl.trim(),
-      autoThumbnailUrl: newLinkAutoThumbnailUrl.trim(),
-      thumbnailPath: newLinkThumbnailPath,
-      galleryUrls: [],
-      clicks: 0,
-    };
-    onUpdateConfig({
-      ...config,
-      customCategories: nextCustomCategories,
-      links: [item, ...config.links],
-    });
-    setNewLinkTitle('');
-    setNewLinkUrl('');
-    setNewLinkDisplayUrl('');
-    setNewLinkDesc('');
-    setNewLinkCategory(resolvedCategory);
-    setCreatingNewLinkCategory(false);
-    setNewLinkCustomCategoryInput('');
-    setNewLinkPreview('auto');
-    setNewLinkThumbnailUrl('');
-    setNewLinkAutoThumbnailUrl('');
-    lastFetchedNewUrlRef.current = '';
-    setNewLinkThumbnailPath('');
-    setNewLinkPinned(false);
-    setShowAddLinkForm(false);
-    setExpandedLinkIds((prev) => ({ ...prev, [item.id]: true }));
-    triggerSavedBanner('Added new link card');
+    const draftResult = buildDraftNewLinkResult(configRef.current);
+    if (!draftResult) return;
+
+    const { nextConfig, createdItem, resolvedCategory } = draftResult;
+    resetNewLinkFormState(resolvedCategory);
+    setExpandedLinkIds((prev) => ({ ...prev, [createdItem.id]: true }));
+
+    const saved = await persistConfigToCloudNow(
+      nextConfig,
+      `Added & saved "${createdItem.title}" to live hub`
+    );
+
+    if (saved && createdItem.previewType === 'auto' && !createdItem.autoThumbnailUrl) {
+      void fetchPreviewForSavedLink(createdItem.id, createdItem.url);
+    }
   };
 
   const handleUpdateLink = (id: string, patch: Partial<LinkCardItem>) => {
-    onUpdateConfig({
-      ...config,
-      links: config.links.map((item) => (item.id === id ? { ...item, ...patch } : item)),
-    });
+    const latest = configRef.current;
+    const nextConfig: SiteConfigState = {
+      ...latest,
+      links: latest.links.map((item) => (item.id === id ? { ...item, ...patch } : item)),
+    };
+    scheduleCloudAutoSave(nextConfig);
   };
 
   const handleDeleteLink = (id: string) => {
-    const target = config.links.find((item) => item.id === id);
+    const latest = configRef.current;
+    const target = latest.links.find((item) => item.id === id);
     if (target?.thumbnailPath) {
       deleteMediaFromFirebaseStorage({
         storagePath: target.thumbnailPath,
         ownerUid,
       }).catch(() => {});
     }
-    onUpdateConfig({
-      ...config,
-      links: config.links.filter((item) => item.id !== id),
-    });
-    triggerSavedBanner('Removed link card');
+    const nextConfig: SiteConfigState = {
+      ...latest,
+      links: latest.links.filter((item) => item.id !== id),
+    };
+    void persistConfigToCloudNow(nextConfig, 'Removed link card');
   };
 
   const handleMoveLink = (index: number, direction: -1 | 1) => {
+    const latest = configRef.current;
     const target = index + direction;
-    if (target < 0 || target >= config.links.length) return;
-    const next = [...config.links];
+    if (target < 0 || target >= latest.links.length) return;
+    const next = [...latest.links];
     const [moved] = next.splice(index, 1);
     next.splice(target, 0, moved);
-    onUpdateConfig({ ...config, links: next });
+    void persistConfigToCloudNow({ ...latest, links: next });
   };
 
   // Social handlers
@@ -1043,29 +1210,33 @@ export const AdminPage: React.FC<AdminPageProps> = ({
       handle: newSocialHandle.trim() || defaultHandle,
       url: cleanUrl,
     };
-    onUpdateConfig({
-      ...config,
-      socials: [...config.socials, item],
-    });
+    const nextConfig: SiteConfigState = {
+      ...configRef.current,
+      socials: [...configRef.current.socials, item],
+    };
     setNewSocialLabel('');
     setNewSocialHandle('');
     setNewSocialUrl('');
-    triggerSavedBanner('Added social icon');
+    void persistConfigToCloudNow(nextConfig, 'Added social icon');
   };
 
   const handleUpdateSocial = (id: string, patch: Partial<SocialLink>) => {
-    onUpdateConfig({
-      ...config,
-      socials: config.socials.map((s) => (s.id === id ? { ...s, ...patch } : s)),
+    const latest = configRef.current;
+    scheduleCloudAutoSave({
+      ...latest,
+      socials: latest.socials.map((s) => (s.id === id ? { ...s, ...patch } : s)),
     });
   };
 
   const handleDeleteSocial = (id: string) => {
-    onUpdateConfig({
-      ...config,
-      socials: config.socials.filter((s) => s.id !== id),
-    });
-    triggerSavedBanner('Removed social icon');
+    const latest = configRef.current;
+    void persistConfigToCloudNow(
+      {
+        ...latest,
+        socials: latest.socials.filter((s) => s.id !== id),
+      },
+      'Removed social icon'
+    );
   };
 
   // Blog Post handlers
@@ -1100,35 +1271,44 @@ export const AdminPage: React.FC<AdminPageProps> = ({
       content: paragraphs.length > 0 ? paragraphs : ['Drafted from the Link Hub Admin Studio.'],
     };
 
-    onUpdateConfig({
-      ...config,
-      posts: [newPost, ...config.posts],
-    });
+    const nextConfig: SiteConfigState = {
+      ...configRef.current,
+      posts: [newPost, ...configRef.current.posts],
+    };
     setNewPostTitle('');
     setNewPostExcerpt('');
     setNewPostBody('');
     setShowAddPostForm(false);
     setExpandedPostSlugs((prev) => ({ ...prev, [newPost.slug]: true }));
-    triggerSavedBanner('Published new blog post');
+    void persistConfigToCloudNow(nextConfig, 'Published new blog post');
   };
 
   const handleUpdatePost = (slug: string, patch: Partial<BlogPost>) => {
-    onUpdateConfig({
-      ...config,
-      posts: config.posts.map((p) => (p.slug === slug ? { ...p, ...patch } : p)),
+    const latest = configRef.current;
+    scheduleCloudAutoSave({
+      ...latest,
+      posts: latest.posts.map((p) => (p.slug === slug ? { ...p, ...patch } : p)),
     });
   };
 
   const handleDeletePost = (slug: string) => {
-    onUpdateConfig({
-      ...config,
-      posts: config.posts.filter((p) => p.slug !== slug),
-    });
-    triggerSavedBanner('Deleted blog post');
+    const latest = configRef.current;
+    void persistConfigToCloudNow(
+      {
+        ...latest,
+        posts: latest.posts.filter((p) => p.slug !== slug),
+      },
+      'Deleted blog post'
+    );
   };
 
   const handleResetToSavedSystem = async () => {
-    onUpdateConfig(DEFAULT_SITE_CONFIG);
+    if (cloudAutoSaveTimerRef.current) {
+      window.clearTimeout(cloudAutoSaveTimerRef.current);
+      cloudAutoSaveTimerRef.current = null;
+    }
+    configRef.current = DEFAULT_SITE_CONFIG;
+    commitLocalConfig(DEFAULT_SITE_CONFIG);
     setPantoneInputHex(SAVED_DESIGN_SYSTEM.customSeedHex || SAVED_DESIGN_SYSTEM.canvasBg);
     if (!ownerUid) {
       triggerSavedBanner('Reset workspace to clean production defaults');
@@ -1139,16 +1319,17 @@ export const AdminPage: React.FC<AdminPageProps> = ({
       const nextCloudIds = await persistFullHubToFirestore({
         siteConfig: DEFAULT_SITE_CONFIG,
         ownerUid,
-        knownCloudLinkIds,
+        knownCloudLinkIds: knownCloudLinkIdsRef.current,
       });
+      knownCloudLinkIdsRef.current = nextCloudIds;
       onUpdateKnownCloudLinkIds(nextCloudIds);
+      setCloudSyncError(null);
       triggerSavedBanner('Reset workspace & cleared cloud hub data');
     } catch (err) {
-      triggerSavedBanner(
-        err instanceof Error
-          ? `Local reset applied; cloud sync failed: ${err.message}`
-          : 'Local reset applied; cloud sync failed'
-      );
+      const errMsg =
+        err instanceof Error ? err.message : 'Cloud sync failed during reset';
+      setCloudSyncError(errMsg);
+      triggerSavedBanner(`Local reset applied; cloud sync failed: ${errMsg}`);
     } finally {
       setSavingToCloud(false);
     }
@@ -1360,6 +1541,24 @@ export const AdminPage: React.FC<AdminPageProps> = ({
               >
                 <Check className="w-3 h-3 text-[#3A2418] shrink-0" />
                 <span>{saveNotice}</span>
+              </div>
+            )}
+
+            {cloudSyncError && (
+              <div
+                role="alert"
+                className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-xl bg-red-50 border border-red-300 text-red-900 font-ibm-mono text-[10.5px]"
+              >
+                <span className="break-words">
+                  <strong>Cloud sync failed:</strong> {cloudSyncError}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void persistConfigToCloudNow(configRef.current, 'Synced live to Cloud Firestore')}
+                  className="px-2.5 py-1 rounded-lg bg-red-800 text-white font-bold hover:bg-red-900 cursor-pointer shrink-0"
+                >
+                  Retry Sync
+                </button>
               </div>
             )}
 
@@ -2672,12 +2871,20 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                         type={newLinkPreview}
                         thumbnailUrl={newLinkThumbnailUrl}
                         autoThumbnailUrl={newLinkAutoThumbnailUrl}
-                        title={newLinkTitle || 'New link preview'}
+                        title={
+                          newLinkTitle.trim() ||
+                          (newLinkUrl.trim()
+                            ? deriveLinkTitleFromUrl(newLinkUrl, newLinkFetchedMetaRef.current?.title)
+                            : 'New link preview')
+                        }
                         isLoading={newLinkPreviewFetching}
                       />
                       <div className="px-1 space-y-0.5">
                         <p className="text-xs font-bold text-[#1A120E] truncate">
-                          {newLinkTitle.trim() || 'Your card title'}
+                          {newLinkTitle.trim() ||
+                            (newLinkUrl.trim()
+                              ? deriveLinkTitleFromUrl(newLinkUrl, newLinkFetchedMetaRef.current?.title)
+                              : 'Your card title')}
                         </p>
                         <p className="text-[10.5px] font-mono font-semibold text-[#3A2418] truncate">
                           {newLinkDisplayUrl.trim() ||
@@ -3015,11 +3222,21 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                                     file: selected,
                                     previousStoragePath: item.thumbnailPath,
                                     onComplete: (publicUrl, staticPath) => {
-                                      handleUpdateLink(item.id, {
-                                        previewType: 'image',
-                                        thumbnailUrl: publicUrl,
-                                        thumbnailPath: staticPath,
-                                      });
+                                      const latest = configRef.current;
+                                      const nextConfig: SiteConfigState = {
+                                        ...latest,
+                                        links: latest.links.map((lnk) =>
+                                          lnk.id === item.id
+                                            ? {
+                                                ...lnk,
+                                                previewType: 'image',
+                                                thumbnailUrl: publicUrl,
+                                                thumbnailPath: staticPath,
+                                              }
+                                            : lnk
+                                        ),
+                                      };
+                                      void persistConfigToCloudNow(nextConfig);
                                     },
                                   });
                                 }}
@@ -3039,11 +3256,21 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                                       item.autoThumbnailUrl?.trim(),
                                     previousStoragePath: item.thumbnailPath,
                                     onComplete: (publicUrl, staticPath) => {
-                                      handleUpdateLink(item.id, {
-                                        previewType: 'image',
-                                        thumbnailUrl: publicUrl,
-                                        thumbnailPath: staticPath,
-                                      });
+                                      const latest = configRef.current;
+                                      const nextConfig: SiteConfigState = {
+                                        ...latest,
+                                        links: latest.links.map((lnk) =>
+                                          lnk.id === item.id
+                                            ? {
+                                                ...lnk,
+                                                previewType: 'image',
+                                                thumbnailUrl: publicUrl,
+                                                thumbnailPath: staticPath,
+                                              }
+                                            : lnk
+                                        ),
+                                      };
+                                      void persistConfigToCloudNow(nextConfig);
                                     },
                                   })
                                 }
@@ -3061,11 +3288,21 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                                   const oldThumbPath = item.thumbnailPath;
                                   const nextType: LinkPreviewType =
                                     item.previewType === 'image' ? 'auto' : item.previewType;
-                                  handleUpdateLink(item.id, {
-                                    previewType: nextType,
-                                    thumbnailUrl: '',
-                                    thumbnailPath: '',
-                                  });
+                                  const latest = configRef.current;
+                                  const nextConfig: SiteConfigState = {
+                                    ...latest,
+                                    links: latest.links.map((lnk) =>
+                                      lnk.id === item.id
+                                        ? {
+                                            ...lnk,
+                                            previewType: nextType,
+                                            thumbnailUrl: '',
+                                            thumbnailPath: '',
+                                          }
+                                        : lnk
+                                    ),
+                                  };
+                                  void persistConfigToCloudNow(nextConfig);
                                   if (nextType === 'auto' && !item.autoThumbnailUrl) {
                                     fetchPreviewForSavedLink(item.id, item.url);
                                   }

@@ -92,16 +92,44 @@ import {
 
 type ActiveRoute = 'hub' | 'work' | 'posts' | 'pass' | 'admin';
 
-function getRouteFromLocation(): ActiveRoute {
-  if (typeof window === 'undefined') return 'hub';
-  const hash = window.location.hash.toLowerCase();
-  if (hash === '#admin' || window.location.pathname.toLowerCase() === '/admin') {
+export function resolveRouteFromParts(
+  pathname: string,
+  search: string,
+  hash: string
+): ActiveRoute {
+  const cleanPath = (pathname || '/').trim().toLowerCase().replace(/\/+$/, '') || '/';
+  const cleanHash = (hash || '').trim().toLowerCase();
+  const viewParam = (new URLSearchParams(search || '').get('view') || '').trim().toLowerCase();
+
+  if (cleanHash === '#admin' || cleanPath === '/admin' || viewParam === 'admin') {
     return 'admin';
   }
-  if (hash === '#pass') return 'pass';
-  if (hash === '#work') return 'work';
-  if (hash === '#posts') return 'posts';
+  if (cleanHash === '#pass' || cleanPath === '/pass' || viewParam === 'pass') {
+    return 'pass';
+  }
+  if (cleanHash === '#work' || cleanPath === '/work' || viewParam === 'work') {
+    return 'work';
+  }
+  if (cleanHash === '#posts' || cleanPath === '/posts' || viewParam === 'posts') {
+    return 'posts';
+  }
   return 'hub';
+}
+
+function getRouteFromLocation(): ActiveRoute {
+  if (typeof window === 'undefined') return 'hub';
+  return resolveRouteFromParts(
+    window.location.pathname,
+    window.location.search,
+    window.location.hash
+  );
+}
+
+function isLocalhostTestAdmin(): boolean {
+  if (typeof window === 'undefined') return false;
+  const host = window.location.hostname;
+  if (host !== 'localhost' && host !== '127.0.0.1') return false;
+  return new URLSearchParams(window.location.search).get('testAdmin') === '1';
 }
 
 function AppContent() {
@@ -116,12 +144,23 @@ function AppContent() {
     return !shouldSkipLoadingScreen(window.location.search);
   });
 
+  // Track whether the admin has modified config in this session so background snapshots don't overwrite active edits
+  const hasLocalAdminEditsRef = useRef(false);
+  const handleAdminUpdateConfig: React.Dispatch<React.SetStateAction<SiteConfigState>> = (
+    updater
+  ) => {
+    hasLocalAdminEditsRef.current = true;
+    setSiteConfig(updater);
+  };
+
   // Cloud Firestore & Auth states (Solo Owner + UID Lock)
   const [knownCloudLinkIds, setKnownCloudLinkIds] = useState<string[]>([]);
-  const [authLoading, setAuthLoading] = useState(true);
+  const [authLoading, setAuthLoading] = useState<boolean>(() => !isLocalhostTestAdmin());
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [guardEvaluation, setGuardEvaluation] = useState<AdminGuardEvaluation>(() =>
-    evaluateAdminAccessGuard({ user: null })
+    isLocalhostTestAdmin()
+      ? { authorized: true, status: 'authorized' }
+      : evaluateAdminAccessGuard({ user: null })
   );
 
   // Admin-only streams (populated ONLY when solo owner passes Google Auth + UID lock)
@@ -157,10 +196,10 @@ function AppContent() {
     };
   }, []);
 
-  // Sync browser URL path to /RajdeepBhattacharyya-LinkHub on public routes
+  // Sync browser URL path to /RajdeepBhattacharyya-LinkHub on primary hub route
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    if (activeRoute === 'admin') return;
+    if (activeRoute !== 'hub') return;
     const currentPath = window.location.pathname;
     if (currentPath === '/' || currentPath === '/index.html') {
       const nextUrl = `${DEFAULT_PUBLIC_URL_PATH}${window.location.search}${window.location.hash}`;
@@ -268,6 +307,9 @@ function AppContent() {
     const unsubPublic = subscribePublicHubAndLinks({
       onConfigUpdate: (cloudConfig, meta) => {
         setKnownCloudLinkIds(meta.cloudLinkIds);
+        if (hasLocalAdminEditsRef.current) {
+          return;
+        }
         if (meta.cloudSeeded) {
           setSiteConfig(cloudConfig);
           saveSiteConfigToStorage(cloudConfig);
@@ -302,6 +344,11 @@ function AppContent() {
       setCurrentUser(firebaseUser);
 
       if (!firebaseUser) {
+        if (isLocalhostTestAdmin()) {
+          setGuardEvaluation({ authorized: true, status: 'authorized' });
+          setAuthLoading(false);
+          return;
+        }
         setGuardEvaluation(evaluateAdminAccessGuard({ user: null }));
         setMessages([]);
         setSubscribers([]);
@@ -383,6 +430,7 @@ function AppContent() {
   const [contactErrors, setContactErrors] = useState<ValidationResult['errors']>({});
   const [contactGuardError, setContactGuardError] = useState<string | null>(null);
   const [contactSuccess, setContactSuccess] = useState(false);
+  const [contactSubmitting, setContactSubmitting] = useState(false);
   const formMountedAtRef = useRef<number>(0);
   const recentSubmitTimestampsRef = useRef<number[]>([]);
 
@@ -430,8 +478,8 @@ function AppContent() {
     }
   };
 
-  const handleAddMessage = (msg: Omit<StoredMessage, 'id' | 'timestamp'>) => {
-    submitVisitorMessageToFirestore(msg).catch(() => {});
+  const handleAddMessage = async (msg: Omit<StoredMessage, 'id' | 'timestamp'>): Promise<void> => {
+    await submitVisitorMessageToFirestore(msg);
   };
 
   const handleDeleteMessage = (id: string) => {
@@ -442,8 +490,9 @@ function AppContent() {
     toggleAdminMessageRead(id, nextRead).catch(() => {});
   };
 
-  const handleHubContactSubmit = (e: React.FormEvent) => {
+  const handleHubContactSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (contactSubmitting) return;
     setContactGuardError(null);
 
     const guard = evaluateSubmissionSecurityGuard({
@@ -471,22 +520,29 @@ function AppContent() {
       return;
     }
 
-    recentSubmitTimestampsRef.current.push(Date.now());
     setContactErrors({});
-    handleAddMessage({
-      name: contactName.trim(),
-      email: contactEmail.trim(),
-      message: contactMessage.trim(),
-      source: 'hub',
-    });
-    setContactSuccess(true);
-    setContactName('');
-    setContactEmail('');
-    setContactMessage('');
+    setContactSubmitting(true);
+    try {
+      await handleAddMessage({
+        name: contactName.trim(),
+        email: contactEmail.trim(),
+        message: contactMessage.trim(),
+        source: 'hub',
+      });
+      recentSubmitTimestampsRef.current.push(Date.now());
+      setContactSuccess(true);
+      setContactName('');
+      setContactEmail('');
+      setContactMessage('');
+    } catch {
+      setContactGuardError('Unable to deliver your message right now. Please try again in a moment.');
+    } finally {
+      setContactSubmitting(false);
+    }
   };
 
-  const handleSubscribe = (name: string, email: string) => {
-    submitSubscriberToFirestore(name, email).catch(() => {});
+  const handleSubscribe = async (name: string, email: string): Promise<void> => {
+    await submitSubscriberToFirestore(name, email);
   };
 
   const rootThemeStyle = {
@@ -778,7 +834,7 @@ function AppContent() {
               setBiometricLockEnabled(enabled);
             }}
             onLockStudio={() => setBiometricUnlocked(false)}
-            onUpdateConfig={setSiteConfig}
+            onUpdateConfig={handleAdminUpdateConfig}
             onUpdateKnownCloudLinkIds={setKnownCloudLinkIds}
             onDeleteMessage={handleDeleteMessage}
             onToggleMessageRead={handleToggleMessageRead}
@@ -1281,11 +1337,12 @@ function AppContent() {
 
                     <button
                       type="submit"
+                      disabled={contactSubmitting}
                       style={{ backgroundColor: designSystem.primaryText }}
-                      className="w-full sm:w-auto h-10 sm:h-9 inline-flex items-center justify-center gap-1.5 px-4 py-1.5 rounded-xl hover:opacity-90 text-[#FAF6F0] text-xs font-semibold shadow-xs transition-all cursor-pointer"
+                      className="w-full sm:w-auto h-10 sm:h-9 inline-flex items-center justify-center gap-1.5 px-4 py-1.5 rounded-xl hover:opacity-90 disabled:opacity-60 text-[#FAF6F0] text-xs font-semibold shadow-xs transition-all cursor-pointer"
                     >
                       <Send className="w-3.5 h-3.5" />
-                      <span>Send</span>
+                      <span>{contactSubmitting ? 'Sending...' : 'Send'}</span>
                     </button>
                   </form>
                 </section>

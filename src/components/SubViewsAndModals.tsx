@@ -40,30 +40,41 @@ export const WorkWithMeView: React.FC<{
   profile: ProfileConfig;
   avatarUrl: string;
   onBack: () => void;
-  onSubmitMessage: (msg: Omit<StoredMessage, 'id' | 'timestamp'>) => void;
+  onSubmitMessage: (msg: Omit<StoredMessage, 'id' | 'timestamp'>) => Promise<void> | void;
 }> = ({ profile, avatarUrl, onBack, onSubmitMessage }) => {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [message, setMessage] = useState('');
   const [errors, setErrors] = useState<ValidationResult['errors']>({});
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
 
   const displayName = profile.name.trim() || 'Link Hub';
   const displayHandle = profile.handle.trim();
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting) return;
+    setSubmitError(null);
     const res = validateContactSubmission({ name, email, message });
     if (!res.valid) {
       setErrors(res.errors);
       return;
     }
     setErrors({});
-    onSubmitMessage({ name: name.trim(), email: email.trim(), message: message.trim(), source: 'work' });
-    setSubmitted(true);
-    setName('');
-    setEmail('');
-    setMessage('');
+    setSubmitting(true);
+    try {
+      await onSubmitMessage({ name: name.trim(), email: email.trim(), message: message.trim(), source: 'work' });
+      setSubmitted(true);
+      setName('');
+      setEmail('');
+      setMessage('');
+    } catch {
+      setSubmitError('Unable to send your request right now. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -109,6 +120,15 @@ export const WorkWithMeView: React.FC<{
               >
                 Send another
               </button>
+            </div>
+          )}
+
+          {submitError && (
+            <div
+              role="alert"
+              className="p-3 rounded-xl bg-red-50 border border-red-300 text-xs text-red-900 font-medium"
+            >
+              {submitError}
             </div>
           )}
 
@@ -292,23 +312,32 @@ export const PostsView: React.FC<{
 export const GetUpdatesModal: React.FC<{
   profileName: string;
   onClose: () => void;
-  onSubscribe: (name: string, email: string) => void;
+  onSubscribe: (name: string, email: string) => Promise<void> | void;
 }> = ({ profileName, onClose, onSubscribe }) => {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting) return;
     const check = validateUpdateSubscription(email);
     if (!check.valid) {
       setError(check.error || 'Invalid email');
       return;
     }
     setError(null);
-    onSubscribe(name.trim(), email.trim());
-    setDone(true);
+    setSubmitting(true);
+    try {
+      await onSubscribe(name.trim(), email.trim());
+      setDone(true);
+    } catch {
+      setError('Unable to subscribe right now. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (

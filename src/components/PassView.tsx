@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import QRCode from 'qrcode';
 import {
   Download,
   Share2,
@@ -21,6 +22,7 @@ import {
   type ProfileConfig,
   type SocialLink,
 } from '../data/profileData';
+import { DEFAULT_PUBLIC_URL_PATH } from '../utils/seoAndGeo';
 import { BrandIcon, BuilderBadge, VerifiedBadge } from './SocialIcons';
 import { buildGoogleMapsExternalUrl, formatCoordinatesLabel, resolveProfileCoordinates } from '../utils/mapLocation';
 
@@ -35,62 +37,21 @@ interface PassViewProps {
 }
 
 /**
- * Generates a deterministic 21x21 QR-style matrix from a seed string (URL/handle)
- * with authentic finder patterns in the three corners.
+ * Generates a real, camera-scannable ISO/IEC 18004 QR code boolean matrix.
  */
-function buildDeterministicQrMatrix(seed: string): boolean[][] {
-  const size = 21;
-  const grid: boolean[][] = Array.from({ length: size }, () =>
-    Array.from({ length: size }, () => false)
-  );
-  const reserved: boolean[][] = Array.from({ length: size }, () =>
-    Array.from({ length: size }, () => false)
-  );
-
-  const placeFinder = (row0: number, col0: number) => {
-    for (let r = -1; r <= 7; r++) {
-      for (let c = -1; c <= 7; c++) {
-        const rr = row0 + r;
-        const cc = col0 + c;
-        if (rr < 0 || rr >= size || cc < 0 || cc >= size) continue;
-        reserved[rr][cc] = true;
-        if (r >= 0 && r <= 6 && c >= 0 && c <= 6) {
-          const onBorder = r === 0 || r === 6 || c === 0 || c === 6;
-          const inCore = r >= 2 && r <= 4 && c >= 2 && c <= 4;
-          grid[rr][cc] = onBorder || inCore;
-        }
-      }
-    }
-  };
-
-  placeFinder(0, 0);
-  placeFinder(0, size - 7);
-  placeFinder(size - 7, 0);
-
-  // Timing patterns
-  for (let i = 8; i < size - 8; i++) {
-    reserved[6][i] = true;
-    reserved[i][6] = true;
-    grid[6][i] = i % 2 === 0;
-    grid[i][6] = i % 2 === 0;
-  }
-
-  let hash = 2166136261;
-  const input = seed || 'link-hub-pass';
-  for (let i = 0; i < input.length; i++) {
-    hash ^= input.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-
+export function buildScannableQrMatrix(url: string): boolean[][] {
+  const payload = (url || 'https://rajdeepbhattacharyya-linkhub.vercel.app/RajdeepBhattacharyya-LinkHub').trim();
+  const qr = QRCode.create(payload, { errorCorrectionLevel: 'M' });
+  const size = qr.modules.size;
+  const data = qr.modules.data;
+  const grid: boolean[][] = [];
   for (let r = 0; r < size; r++) {
+    const row: boolean[] = [];
     for (let c = 0; c < size; c++) {
-      if (reserved[r][c]) continue;
-      hash ^= (r * 31 + c * 17 + 13) & 0xff;
-      hash = Math.imul(hash, 16777619);
-      grid[r][c] = (Math.abs(hash) % 10) < 5;
+      row.push(Boolean(data[r * size + c]));
     }
+    grid.push(row);
   }
-
   return grid;
 }
 
@@ -190,12 +151,16 @@ export const PassView: React.FC<PassViewProps> = ({
   }, [profile.passSerial, displayName, cleanHandle]);
 
   const hubShareUrl =
-    typeof window !== 'undefined' ? window.location.origin : 'https://linkhub.dev';
+    typeof window !== 'undefined'
+      ? `${window.location.origin}${DEFAULT_PUBLIC_URL_PATH}`
+      : `https://rajdeepbhattacharyya-linkhub.vercel.app${DEFAULT_PUBLIC_URL_PATH}`;
 
   const qrMatrix = useMemo(
-    () => buildDeterministicQrMatrix(`${hubShareUrl}/${cleanHandle || displayName}`),
-    [hubShareUrl, cleanHandle, displayName]
+    () => buildScannableQrMatrix(hubShareUrl),
+    [hubShareUrl]
   );
+  const qrSize = qrMatrix.length || 21;
+  const qrQuietZone = 2;
 
   const activeSwatches = useMemo(() => {
     const customList = [
@@ -648,14 +613,21 @@ export const PassView: React.FC<PassViewProps> = ({
                     </p>
                   </div>
 
-                  {/* High-Contrast QR Matrix Ticket Stub */}
+                  {/* High-Contrast Camera-Scannable ISO 18004 QR Ticket Stub */}
                   <div className="p-2 rounded-2xl bg-[#FAF6F0] text-[#1A120E] shadow-md shrink-0 flex flex-col items-center gap-1 border border-[#D5C4AE]">
                     <svg
-                      viewBox="0 0 21 21"
-                      className="w-14 h-14"
+                      viewBox={`${-qrQuietZone} ${-qrQuietZone} ${qrSize + qrQuietZone * 2} ${qrSize + qrQuietZone * 2}`}
+                      className="w-16 h-16"
                       shapeRendering="crispEdges"
-                      aria-label="Pass QR code"
+                      aria-label={`Scannable QR code for ${hubShareUrl}`}
                     >
+                      <rect
+                        x={-qrQuietZone}
+                        y={-qrQuietZone}
+                        width={qrSize + qrQuietZone * 2}
+                        height={qrSize + qrQuietZone * 2}
+                        fill="#FAF6F0"
+                      />
                       {qrMatrix.map((row, rIdx) =>
                         row.map((cell, cIdx) =>
                           cell ? (

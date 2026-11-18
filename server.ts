@@ -1,10 +1,14 @@
+import 'dotenv/config';
 import express, { type Request, type Response } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  buildWebsiteScreenshotFallbackUrl,
   extractLinkPreviewMetadata,
+  fetchLinkPreviewFromMicrolink,
   LinkPreviewMemoryCache,
+  resolvePlatformPreviewImage,
   validatePreviewTargetUrl,
   type LinkPreviewMetadata,
 } from './src/utils/linkPreview.ts';
@@ -92,8 +96,23 @@ async function loadLivePublicHubForSeo(): Promise<{
         signal: AbortSignal.timeout(1800),
       }),
       fetch(
-        `${baseFirestoreUrl}/links?pageSize=100&key=${encodeURIComponent(apiKey)}`,
+        `${baseFirestoreUrl}:runQuery?key=${encodeURIComponent(apiKey)}`,
         {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            structuredQuery: {
+              from: [{ collectionId: 'links' }],
+              where: {
+                fieldFilter: {
+                  field: { fieldPath: 'isPublic' },
+                  op: 'EQUAL',
+                  value: { booleanValue: true },
+                },
+              },
+              limit: 100,
+            },
+          }),
           signal: AbortSignal.timeout(1800),
         }
       ),
@@ -122,15 +141,19 @@ async function loadLivePublicHubForSeo(): Promise<{
 
     let finalLinks = baseConfig.links;
     if (linksRes.ok) {
-      const linksJson = (await linksRes.json()) as { documents?: unknown[] };
-      const docs = Array.isArray(linksJson.documents) ? linksJson.documents : [];
+      const queryRows = (await linksRes.json()) as Array<{ document?: unknown }>;
+      const docs = Array.isArray(queryRows)
+        ? queryRows.map((row) => row?.document).filter(Boolean)
+        : [];
       const parsed = docs
         .map(parseFirestoreRestLink)
         .filter((item): item is NonNullable<typeof item> => Boolean(item && item.isPublic))
         .filter((item) => !legacyDemoDetected || !LEGACY_DEMO_LINK_IDS.has(item.id))
         .sort((a, b) => a.orderIndex - b.orderIndex)
         .map(({ orderIndex: _oi, isPublic: _ip, ...rest }) => rest);
-      finalLinks = parsed;
+      if (parsed.length > 0) {
+        finalLinks = parsed;
+      }
     }
 
     const combined: SiteConfigState = {
@@ -269,13 +292,18 @@ async function fetchWebsitePreviewMetadata(normalizedUrl: string): Promise<LinkP
   if (existingPromise) return existingPromise;
 
   const task = (async (): Promise<LinkPreviewMetadata> => {
+    let partialTitle: string | undefined;
+    let partialDesc: string | undefined;
+    let partialSiteName: string | undefined;
+
     try {
       const res = await fetch(normalizedUrl, {
         method: 'GET',
         redirect: 'follow',
-        signal: AbortSignal.timeout(6000),
+        signal: AbortSignal.timeout(5500),
         headers: {
-          'User-Agent': 'Mozilla/5.0 (compatible; LinkHubPreviewBot/1.0)',
+          'User-Agent':
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
           Accept: 'text/html,application/xhtml+xml,image/*;q=0.8,*/*;q=0.5',
           'Accept-Language': 'en-US,en;q=0.9',
         },
@@ -295,59 +323,72 @@ async function fetchWebsitePreviewMetadata(normalizedUrl: string): Promise<LinkP
         return { ...blocked, cached: false };
       }
 
-      if (!res.ok) {
-        const miss: Omit<LinkPreviewMetadata, 'cached'> = {
-          ok: true,
-          found: false,
-          imageUrl: null,
-          sourceUrl: finalUrl,
-          error: `Target responded with status ${res.status}`,
-        };
-        previewCache.set(normalizedUrl, miss);
-        return { ...miss, cached: false };
+      if (res.ok) {
+        const contentType = (res.headers.get('content-type') || '').toLowerCase();
+        if (contentType.startsWith('image/')) {
+          const directImage: Omit<LinkPreviewMetadata, 'cached'> = {
+            ok: true,
+            found: true,
+            imageUrl: finalUrl,
+            sourceUrl: finalUrl,
+          };
+          previewCache.set(normalizedUrl, directImage);
+          return { ...directImage, cached: false };
+        }
+
+        if (contentType.includes('text/html') || contentType.includes('application/xhtml+xml')) {
+          const html = await readBoundedText(res, 262_144);
+          const extracted = extractLinkPreviewMetadata(html, finalUrl);
+          partialTitle = extracted.title;
+          partialDesc = extracted.description;
+          partialSiteName = extracted.siteName;
+          if (extracted.found && extracted.imageUrl) {
+            const payload: Omit<LinkPreviewMetadata, 'cached'> = {
+              ok: true,
+              ...extracted,
+            };
+            previewCache.set(normalizedUrl, payload);
+            return { ...payload, cached: false };
+          }
+        }
+      }
+    } catch {
+      // Fall through to Microlink & platform/screenshot resolvers
+    }
+
+    try {
+      const microlink = await fetchLinkPreviewFromMicrolink(normalizedUrl);
+      if (microlink) {
+        partialTitle = microlink.title || partialTitle;
+        partialDesc = microlink.description || partialDesc;
+        partialSiteName = microlink.siteName || partialSiteName;
+        if (microlink.found && microlink.imageUrl) {
+          const resolved: Omit<LinkPreviewMetadata, 'cached'> = {
+            ...microlink,
+            title: partialTitle,
+            description: partialDesc,
+            siteName: partialSiteName,
+          };
+          previewCache.set(normalizedUrl, resolved);
+          return { ...resolved, cached: false };
+        }
       }
 
-      const contentType = (res.headers.get('content-type') || '').toLowerCase();
-      if (contentType.startsWith('image/')) {
-        const directImage: Omit<LinkPreviewMetadata, 'cached'> = {
-          ok: true,
-          found: true,
-          imageUrl: finalUrl,
-          sourceUrl: finalUrl,
-        };
-        previewCache.set(normalizedUrl, directImage);
-        return { ...directImage, cached: false };
-      }
+      const fallbackImg =
+        resolvePlatformPreviewImage(normalizedUrl) ||
+        buildWebsiteScreenshotFallbackUrl(normalizedUrl);
 
-      if (!contentType.includes('text/html') && !contentType.includes('application/xhtml+xml')) {
-        const nonHtml: Omit<LinkPreviewMetadata, 'cached'> = {
-          ok: true,
-          found: false,
-          imageUrl: null,
-          sourceUrl: finalUrl,
-        };
-        previewCache.set(normalizedUrl, nonHtml);
-        return { ...nonHtml, cached: false };
-      }
-
-      const html = await readBoundedText(res, 262_144);
-      const extracted = extractLinkPreviewMetadata(html, finalUrl);
-      const payload: Omit<LinkPreviewMetadata, 'cached'> = {
+      const finalPayload: Omit<LinkPreviewMetadata, 'cached'> = {
         ok: true,
-        ...extracted,
-      };
-      previewCache.set(normalizedUrl, payload);
-      return { ...payload, cached: false };
-    } catch (err) {
-      const miss: Omit<LinkPreviewMetadata, 'cached'> = {
-        ok: true,
-        found: false,
-        imageUrl: null,
+        found: Boolean(fallbackImg),
+        imageUrl: fallbackImg,
+        title: partialTitle,
+        description: partialDesc,
+        siteName: partialSiteName,
         sourceUrl: normalizedUrl,
-        error: err instanceof Error ? err.message : 'Failed to fetch website preview',
       };
-      previewCache.set(normalizedUrl, miss);
-      return { ...miss, cached: false };
+      previewCache.set(normalizedUrl, finalPayload);
+      return { ...finalPayload, cached: false };
     } finally {
       inFlightRequests.delete(normalizedUrl);
     }

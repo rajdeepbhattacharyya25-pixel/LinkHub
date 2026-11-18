@@ -4,12 +4,12 @@
 
 **High-craft, self-hosted personal developer portfolio, interactive 3D builder pass, live GitHub activity tracker, Pantone Color Institute® design system studio, and zero-trust admin workspace.**
 
-[![Live Production](https://img.shields.io/badge/Live_Production-Visit_Link_Hub-4A3324?style=for-the-badge&logo=googlecloud&logoColor=FAF6F0)](https://ais-pre-ug6ehzwfo7kwgfgai5yppk-333090817686.asia-southeast1.run.app)
+[![Live Production](https://img.shields.io/badge/Live_Production-Visit_Link_Hub-4A3324?style=for-the-badge&logo=googlecloud&logoColor=FAF6F0)](https://rajdeepbhattacharyya-linkhub.vercel.app)
 [![React 19](https://img.shields.io/badge/React-19.0-1A120E?style=for-the-badge&logo=react&logoColor=61DAFB)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-1A120E?style=for-the-badge&logo=typescript&logoColor=3178C6)](https://www.typescriptlang.org/)
 [![Tailwind CSS v4](https://img.shields.io/badge/Tailwind_CSS-v4.3-1A120E?style=for-the-badge&logo=tailwindcss&logoColor=38B2AC)](https://tailwindcss.com/)
 [![Firebase Firestore](https://img.shields.io/badge/Firebase-Firestore_%26_Auth-1A120E?style=for-the-badge&logo=firebase&logoColor=FFCA28)](https://firebase.google.com/)
-[![Pantone System](https://img.shields.io/badge/PANTONE-19--1118_TCX-6B4A2E?style=for-the-badge)](https://ais-pre-ug6ehzwfo7kwgfgai5yppk-333090817686.asia-southeast1.run.app)
+[![Pantone System](https://img.shields.io/badge/PANTONE-19--1118_TCX-6B4A2E?style=for-the-badge)](https://rajdeepbhattacharyya-linkhub.vercel.app)
 
 ---
 
@@ -17,13 +17,13 @@
 
 | Environment / Endpoint | URL | Description |
 | :--- | :--- | :--- |
-| **Production App (Live)** | [**`https://ais-pre-ug6ehzwfo7kwgfgai5yppk-333090817686.asia-southeast1.run.app`**](https://ais-pre-ug6ehzwfo7kwgfgai5yppk-333090817686.asia-southeast1.run.app) | Primary public developer portfolio & link hub |
-| **Interactive Digital Pass** | [**`.../pass` (`?view=pass`)**](https://ais-pre-ug6ehzwfo7kwgfgai5yppk-333090817686.asia-southeast1.run.app/?view=pass) | 3D tilt-reactive Creator & Builder Pass with `.vcf` & PNG export |
-| **Solo Owner Studio** | [**`.../admin`**](https://ais-pre-ug6ehzwfo7kwgfgai5yppk-333090817686.asia-southeast1.run.app/admin) | Zero-trust Google Auth + WebAuthn Biometric Admin Studio |
-| **LLM Context (`llms.txt`)** | [**`.../llms.txt`**](https://ais-pre-ug6ehzwfo7kwgfgai5yppk-333090817686.asia-southeast1.run.app/llms.txt) | Concise AI/LLM discovery manifest (GEO standard) |
-| **Full LLM Profile (`llms-full.txt`)** | [**`.../llms-full.txt`**](https://ais-pre-ug6ehzwfo7kwgfgai5yppk-333090817686.asia-southeast1.run.app/llms-full.txt) | Full markdown dossier including articles, stack, and links |
-| **AI Profile JSON** | [**`.../.well-known/ai-profile.json`**](https://ais-pre-ug6ehzwfo7kwgfgai5yppk-333090817686.asia-southeast1.run.app/.well-known/ai-profile.json) | Structured machine-readable developer identity & skills |
-| **Dynamic OpenGraph Card** | [**`.../og-card.svg`**](https://ais-pre-ug6ehzwfo7kwgfgai5yppk-333090817686.asia-southeast1.run.app/og-card.svg) | Server-rendered 1200×630 SVG social card synced with active Pantone theme |
+| **Production App (Live)** | [**`https://rajdeepbhattacharyya-linkhub.vercel.app`**](https://rajdeepbhattacharyya-linkhub.vercel.app) | Primary public developer portfolio & link hub |
+| **Interactive Digital Pass** | [**`.../pass` (`?view=pass`)**](https://rajdeepbhattacharyya-linkhub.vercel.app/?view=pass) | 3D tilt-reactive Creator & Builder Pass with `.vcf` & PNG export |
+| **Solo Owner Studio** | [**`.../admin`**](https://rajdeepbhattacharyya-linkhub.vercel.app/admin) | Zero-trust Google Auth + WebAuthn Biometric Admin Studio |
+| **LLM Context (`llms.txt`)** | [**`.../llms.txt`**](https://rajdeepbhattacharyya-linkhub.vercel.app/llms.txt) | Concise AI/LLM discovery manifest (GEO standard) |
+| **Full LLM Profile (`llms-full.txt`)** | [**`.../llms-full.txt`**](https://rajdeepbhattacharyya-linkhub.vercel.app/llms-full.txt) | Full markdown dossier including articles, stack, and links |
+| **AI Profile JSON** | [**`.../.well-known/ai-profile.json`**](https://rajdeepbhattacharyya-linkhub.vercel.app/.well-known/ai-profile.json) | Structured machine-readable developer identity & skills |
+| **Dynamic OpenGraph Card** | [**`.../og-card.svg`**](https://rajdeepbhattacharyya-linkhub.vercel.app/og-card.svg) | Server-rendered 1200×630 SVG social card synced with active Pantone theme |
 
 </div>
 
@@ -248,8 +248,8 @@ All persistent state is stored in Cloud Firestore and protected by `firestore.ru
 ### 1. Clone & Install Dependencies
 
 ```bash
-git clone <your-repo-url>
-cd link-hub
+git clone https://github.com/rajdeepbhattacharyya25-pixel/LinkHub.git
+cd LinkHub
 npm install
 ```
 

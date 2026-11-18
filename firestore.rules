@@ -59,7 +59,7 @@ service cloud.firestore {
         ])
         && data.keys().hasOnly([
           'ownerUid', 'profile', 'designSystem', 'featuredSong',
-          'socials', 'posts', 'customCategories',
+          'socials', 'posts', 'customCategories', 'links',
           'showGithubSection', 'showSongCard', 'showMapCard', 'showContactSection', 'updatedAt'
         ])
         && isValidId(data.ownerUid)
@@ -70,6 +70,7 @@ service cloud.firestore {
         && data.socials is list && data.socials.size() <= 20
         && data.posts is list && data.posts.size() <= 100
         && data.customCategories is list && data.customCategories.size() <= 30
+        && (!('links' in data) || (data.links is list && data.links.size() <= 50))
         && data.showGithubSection is bool
         && data.showSongCard is bool
         && data.showMapCard is bool
@@ -239,7 +240,7 @@ service cloud.firestore {
         && incoming().ownerUid == existing().ownerUid
         && incoming().updatedAt == request.time
         && incoming().diff(existing()).affectedKeys().hasOnly([
-          'profile', 'designSystem', 'featuredSong', 'socials', 'posts', 'customCategories',
+          'profile', 'designSystem', 'featuredSong', 'socials', 'posts', 'customCategories', 'links',
           'showGithubSection', 'showSongCard', 'showMapCard', 'showContactSection', 'updatedAt'
         ]);
       allow delete: if false;

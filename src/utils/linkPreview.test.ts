@@ -1,13 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildWebsiteScreenshotFallbackUrl,
+  deriveLinkTitleFromUrl,
   extractLinkPreviewMetadata,
   LinkPreviewMemoryCache,
   normalizeLinkPreviewType,
   resolveCardPreviewDisplay,
+  resolvePlatformPreviewImage,
   validatePreviewTargetUrl,
 } from './linkPreview';
-import { sanitizeLinkPayload } from '../services/firebaseHubService';
+import { sanitizeHttpUrl, sanitizeLinkPayload } from '../services/firebaseHubService';
+import linkPreviewHandler from '../../api/link-preview';
+import imageProxyHandler from '../../api/image-proxy';
+import mediaHandler from '../../api/media/[mediaId]';
 
 test('resolveCardPreviewDisplay enforces the exact 6-option Art dropdown matrix', () => {
   const manual = 'https://cdn.example.com/manual.webp';
@@ -119,6 +125,42 @@ test('extractLinkPreviewMetadata extracts OG/Twitter images, resolves relative p
   assert.equal(missing.found, false);
   assert.equal(missing.imageUrl, null);
   assert.equal(missing.title, 'Plain Site');
+
+  // Platform fallback inside extractLinkPreviewMetadata when GitHub HTML lacks og:image
+  const ghMissingOg = extractLinkPreviewMetadata(noImageHtml, 'https://github.com/vercel/next.js');
+  assert.equal(ghMissingOg.found, true);
+  assert.equal(ghMissingOg.imageUrl, 'https://opengraph.githubassets.com/1/vercel/next.js');
+});
+
+test('resolvePlatformPreviewImage, buildWebsiteScreenshotFallbackUrl, and deriveLinkTitleFromUrl work accurately', () => {
+  assert.equal(
+    resolvePlatformPreviewImage('https://github.com/facebook/react'),
+    'https://opengraph.githubassets.com/1/facebook/react'
+  );
+  assert.equal(
+    resolvePlatformPreviewImage('https://github.com/torvalds'),
+    'https://github.com/torvalds.png?size=600'
+  );
+  assert.equal(
+    resolvePlatformPreviewImage('https://www.youtube.com/watch?v=dQw4w9WgXcQ'),
+    'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg'
+  );
+  assert.equal(
+    buildWebsiteScreenshotFallbackUrl('https://rajdeepbhattacharyya-linkhub.vercel.app'),
+    'https://image.thum.io/get/width/800/crop/450/noanimate/https://rajdeepbhattacharyya-linkhub.vercel.app/'
+  );
+  assert.equal(
+    deriveLinkTitleFromUrl('https://github.com/vercel/next.js'),
+    'vercel/next.js'
+  );
+  assert.equal(
+    deriveLinkTitleFromUrl('https://my-cool-project.vercel.app', 'My Cool SaaS'),
+    'My Cool SaaS'
+  );
+  assert.equal(
+    deriveLinkTitleFromUrl('https://my-cool-project.vercel.app'),
+    'My Cool Project'
+  );
 });
 
 test('LinkPreviewMemoryCache respects hit/miss TTLs and bounded LRU eviction', () => {
@@ -185,4 +227,51 @@ test('sanitizeLinkPayload and normalizeLinkPreviewType persist auto previewType 
   );
   assert.equal(sanitized.previewType, 'auto');
   assert.equal(sanitized.autoThumbnailUrl, 'https://example.com/og-cover.jpg');
+});
+
+test('sanitizeHttpUrl never emits bare https:// that violates Firestore link URL rules', () => {
+  assert.equal(sanitizeHttpUrl(''), 'https://example.com');
+  assert.equal(sanitizeHttpUrl('   '), 'https://example.com');
+  assert.equal(sanitizeHttpUrl('https://'), 'https://example.com');
+  assert.equal(sanitizeHttpUrl('github.com/rajdeep'), 'https://github.com/rajdeep');
+});
+
+test('Vercel serverless api handlers execute cleanly in ESM and enforce SSRF & ID validation', async () => {
+  const createMockRes = () => {
+    let statusCode = 200;
+    let jsonBody: unknown = null;
+    const headers: Record<string, string> = {};
+    const res = {
+      status(code: number) {
+        statusCode = code;
+        return res;
+      },
+      setHeader(name: string, value: string) {
+        headers[name.toLowerCase()] = value;
+      },
+      json(body: unknown) {
+        jsonBody = body;
+      },
+      send() {},
+      end() {},
+      getResult: () => ({ statusCode, jsonBody, headers }),
+    };
+    return res;
+  };
+
+  // 1. api/link-preview blocks private SSRF target via req.url fallback
+  const previewRes = createMockRes();
+  await linkPreviewHandler({ url: '/api/link-preview?url=http://127.0.0.1:8080' }, previewRes);
+  assert.equal(previewRes.getResult().statusCode, 400);
+  assert.equal((previewRes.getResult().jsonBody as { ok?: boolean })?.ok, false);
+
+  // 2. api/image-proxy blocks cloud metadata IP
+  const proxyRes = createMockRes();
+  await imageProxyHandler({ url: '/api/image-proxy?url=http://169.254.169.254/latest' }, proxyRes);
+  assert.equal(proxyRes.getResult().statusCode, 400);
+
+  // 3. api/media/[mediaId] rejects invalid path traversal IDs cleanly
+  const mediaRes = createMockRes();
+  await mediaHandler({ url: '/api/media/..%2Fsecret' }, mediaRes);
+  assert.equal(mediaRes.getResult().statusCode, 400);
 });

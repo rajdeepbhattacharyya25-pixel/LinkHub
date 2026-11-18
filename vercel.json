@@ -1,6 +1,34 @@
 {
   "rewrites": [
     {
+      "source": "/api/health",
+      "destination": "/api/public-config?mode=health"
+    },
+    {
+      "source": "/robots.txt",
+      "destination": "/api/seo?type=robots"
+    },
+    {
+      "source": "/sitemap.xml",
+      "destination": "/api/seo?type=sitemap"
+    },
+    {
+      "source": "/llms.txt",
+      "destination": "/api/seo?type=llms"
+    },
+    {
+      "source": "/llms-full.txt",
+      "destination": "/api/seo?type=llms-full"
+    },
+    {
+      "source": "/.well-known/ai-profile.json",
+      "destination": "/api/seo?type=ai-profile"
+    },
+    {
+      "source": "/og-card.svg",
+      "destination": "/api/seo?type=og-card"
+    },
+    {
       "source": "/RajdeepBhattacharyya-LinkHub",
       "destination": "/index.html"
     },
@@ -10,6 +38,22 @@
     },
     {
       "source": "/admin",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/admin/",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/pass",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/posts",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/work",
       "destination": "/index.html"
     }
   ]

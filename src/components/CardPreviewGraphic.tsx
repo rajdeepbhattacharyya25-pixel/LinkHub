@@ -3,6 +3,7 @@ import {
   resolveCardPreviewDisplay,
   type LinkPreviewType,
 } from '../utils/linkPreview';
+import { ensureClientMediaHydrated } from '../services/firebaseHubService';
 
 export interface CardPreviewGraphicProps {
   type: LinkPreviewType;
@@ -20,10 +21,8 @@ export const CardPreviewGraphic: React.FC<CardPreviewGraphicProps> = ({
   isLoading = false,
 }) => {
   const [imgError, setImgError] = useState(false);
-
-  useEffect(() => {
-    setImgError(false);
-  }, [type, thumbnailUrl, autoThumbnailUrl]);
+  const [fallbackSrc, setFallbackSrc] = useState<string | null>(null);
+  const [triedRelay, setTriedRelay] = useState(false);
 
   const resolved = resolveCardPreviewDisplay({
     previewType: type,
@@ -32,14 +31,60 @@ export const CardPreviewGraphic: React.FC<CardPreviewGraphicProps> = ({
     imageFailed: imgError,
   });
 
+  useEffect(() => {
+    setImgError(false);
+    setFallbackSrc(null);
+    setTriedRelay(false);
+
+    const rawImg = resolved.mode === 'image' ? (resolved.imageUrl || '').trim() : '';
+    if (rawImg.startsWith('/api/media/')) {
+      let cancelled = false;
+      ensureClientMediaHydrated(rawImg)
+        .then((hydrated) => {
+          if (!cancelled && hydrated && hydrated !== rawImg) {
+            setFallbackSrc(hydrated);
+            setImgError(false);
+          }
+        })
+        .catch(() => {});
+      return () => {
+        cancelled = true;
+      };
+    }
+  }, [type, thumbnailUrl, autoThumbnailUrl, resolved.mode, resolved.imageUrl]);
+
   if (resolved.mode === 'image' && resolved.imageUrl) {
+    const activeSrc = fallbackSrc || resolved.imageUrl;
+
+    const handleImageError = () => {
+      const raw = (resolved.imageUrl || '').trim();
+      if (raw.startsWith('/api/media/') && !fallbackSrc) {
+        ensureClientMediaHydrated(raw)
+          .then((hydrated) => {
+            if (hydrated && hydrated.startsWith('data:')) {
+              setFallbackSrc(hydrated);
+            } else {
+              setImgError(true);
+            }
+          })
+          .catch(() => setImgError(true));
+        return;
+      }
+      if (/^https?:\/\//i.test(raw) && !triedRelay && !raw.includes('images.weserv.nl')) {
+        setTriedRelay(true);
+        setFallbackSrc(`https://images.weserv.nl/?url=${encodeURIComponent(raw)}&w=800&fit=cover`);
+        return;
+      }
+      setImgError(true);
+    };
+
     return (
       <div className="w-full h-32 rounded-xl bg-[#EAE0D3] border border-[#B89B7E] relative overflow-hidden">
         <img
-          src={resolved.imageUrl}
+          src={activeSrc}
           alt={`${title || 'Link'} preview thumbnail`}
           referrerPolicy="no-referrer"
-          onError={() => setImgError(true)}
+          onError={handleImageError}
           className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
         />
         {isLoading && (
