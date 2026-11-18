@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
+import React, { useState, useEffect, useRef, lazy, Suspense, startTransition } from 'react';
 import {
   Briefcase,
   Bell,
@@ -14,7 +14,7 @@ import {
   MapPin,
   Home,
 } from 'lucide-react';
-import { onAuthStateChanged, type User } from 'firebase/auth';
+import type { User } from 'firebase/auth';
 import {
   DEFAULT_SITE_CONFIG,
   isHubConfigured,
@@ -36,31 +36,17 @@ import {
   evaluateSubmissionSecurityGuard,
   type ValidationResult,
 } from './utils/hubLogic';
-import {
-  auth,
-  OWNER_ADMIN_EMAIL,
-  evaluateAdminAccessGuard,
-  initFirebaseAnalytics,
-  testConnection,
-  type AdminGuardEvaluation,
-} from './services/firebase';
-import {
-  signInOwnerWithGoogle,
-  signOutOwner,
-  verifyAndLockSoloOwner,
-  subscribePublicHubAndLinks,
-  submitVisitorMessageToFirestore,
-  submitSubscriberToFirestore,
-  trackPublicLinkClick,
-  trackPublicProfileView,
-  subscribeAdminInboxAndTelemetry,
-  subscribeAdminPasskeys,
-  touchAdminPasskeyUsage,
-  deleteAdminMessageFromFirestore,
-  toggleAdminMessageRead,
-  type FirestoreAnalyticsRecord,
-  type AdminSubscriberRecord,
+import type { AdminGuardEvaluation } from './services/firebase';
+import type {
+  FirestoreAnalyticsRecord,
+  AdminSubscriberRecord,
 } from './services/firebaseHubService';
+import {
+  PUBLIC_OWNER_ADMIN_EMAIL,
+  PUBLIC_MEASUREMENT_ID,
+  fetchPublicHubAndLinksRest,
+} from './services/publicHubRestService';
+import { registerPublicWebMcpTools } from './utils/webMcp';
 import {
   isBiometricLockPreferred,
   loadPairedDevicePasskeys,
@@ -68,29 +54,39 @@ import {
   type AdminPasskeyRecord,
 } from './utils/biometricAuth';
 import { BrandIcon, VerifiedBadge, BuilderBadge } from './components/SocialIcons';
-import { GitHubActivity } from './components/GitHubActivity';
 import { LinkBentoSection } from './components/LinkBentoSection';
-import { AdminAuthGate } from './components/AdminAuthGate';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { PortraitLoadingScreen } from './components/PortraitLoadingScreen';
+import {
+  DEFAULT_LOADING_SCREEN_DURATION_MS,
+  shouldSkipLoadingScreen,
+} from './utils/loadingScreenLogic';
+import type { StoredMessage } from './components/SubViewsAndModals';
 
+const GitHubActivity = lazy(() =>
+  import('./components/GitHubActivity').then((m) => ({ default: m.GitHubActivity }))
+);
+const AdminAuthGate = lazy(() =>
+  import('./components/AdminAuthGate').then((m) => ({ default: m.AdminAuthGate }))
+);
 const PassView = lazy(() =>
   import('./components/PassView').then((m) => ({ default: m.PassView }))
 );
 const AdminPage = lazy(() =>
   import('./components/AdminPage').then((m) => ({ default: m.AdminPage }))
 );
-import { PortraitLoadingScreen } from './components/PortraitLoadingScreen';
-import {
-  DEFAULT_LOADING_SCREEN_DURATION_MS,
-  shouldSkipLoadingScreen,
-} from './utils/loadingScreenLogic';
-import {
-  WorkWithMeView,
-  PostsView,
-  GetUpdatesModal,
-  ShareModal,
-  type StoredMessage,
-} from './components/SubViewsAndModals';
+const WorkWithMeView = lazy(() =>
+  import('./components/SubViewsAndModals').then((m) => ({ default: m.WorkWithMeView }))
+);
+const PostsView = lazy(() =>
+  import('./components/SubViewsAndModals').then((m) => ({ default: m.PostsView }))
+);
+const GetUpdatesModal = lazy(() =>
+  import('./components/SubViewsAndModals').then((m) => ({ default: m.GetUpdatesModal }))
+);
+const ShareModal = lazy(() =>
+  import('./components/SubViewsAndModals').then((m) => ({ default: m.ShareModal }))
+);
 import {
   buildGoogleMapsExternalUrl,
   hasAnyMapLocationData,
@@ -160,8 +156,16 @@ function AppContent() {
   const [siteConfig, setSiteConfig] = useState<SiteConfigState>(() =>
     loadSavedSiteConfig()
   );
+  const [cloudHydrated, setCloudHydrated] = useState<boolean>(() =>
+    isHubConfigured(loadSavedSiteConfig())
+  );
+  const [githubInView, setGithubInView] = useState(false);
+  const githubSectionRef = useRef<HTMLDivElement | null>(null);
+  const siteConfigRef = useRef<SiteConfigState>(siteConfig);
+  siteConfigRef.current = siteConfig;
   const [showLoadingScreen, setShowLoadingScreen] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
+    if (getRouteFromLocation() === 'admin') return false;
     return !shouldSkipLoadingScreen(window.location.search);
   });
 
@@ -181,7 +185,11 @@ function AppContent() {
   const [guardEvaluation, setGuardEvaluation] = useState<AdminGuardEvaluation>(() =>
     isLocalhostTestAdmin()
       ? { authorized: true, status: 'authorized' }
-      : evaluateAdminAccessGuard({ user: null })
+      : {
+        authorized: false,
+        status: 'unauthenticated',
+        reason: 'Google Sign-In required to unlock Admin Studio.',
+      }
   );
 
   // Admin-only streams (populated ONLY when solo owner passes Google Auth + UID lock)
@@ -306,7 +314,7 @@ function AppContent() {
     ldScript.textContent = serializeJsonLdSafe(jsonLd);
   }, [siteConfig, activeRoute]);
 
-  // Track real session-deduped profile view telemetry
+  // Track real session-deduped profile view telemetry after first real user interaction (keeps initial load 0-SDK)
   useEffect(() => {
     if (activeRoute !== 'hub' && activeRoute !== 'pass') return;
     if (typeof window === 'undefined') return;
@@ -314,112 +322,212 @@ function AppContent() {
       activeRoute === 'pass' ? 'lh_session_viewed_pass' : 'lh_session_viewed_hub';
     try {
       if (window.sessionStorage.getItem(sessionKey)) return;
-      window.sessionStorage.setItem(sessionKey, '1');
     } catch {
-      // Ignore storage restriction and still track view
+      // Ignore storage restriction
     }
-    trackPublicProfileView({ source: activeRoute }).catch(() => {});
+
+    let fired = false;
+    const recordOnInteraction = () => {
+      if (fired) return;
+      fired = true;
+      cleanup();
+      try {
+        window.sessionStorage.setItem(sessionKey, '1');
+      } catch {
+        // Ignore storage restriction
+      }
+      import('./services/firebaseHubService')
+        .then((svc) => svc.trackPublicProfileView({ source: activeRoute }))
+        .catch(() => { });
+      if (PUBLIC_MEASUREMENT_ID) {
+        import('./services/firebase')
+          .then((fb) => fb.initFirebaseAnalytics())
+          .catch(() => { });
+      }
+    };
+
+    const cleanup = () => {
+      window.removeEventListener('pointerdown', recordOnInteraction);
+      window.removeEventListener('keydown', recordOnInteraction);
+      window.removeEventListener('scroll', recordOnInteraction);
+    };
+
+    window.addEventListener('pointerdown', recordOnInteraction, { passive: true, once: true });
+    window.addEventListener('keydown', recordOnInteraction, { passive: true, once: true });
+    window.addEventListener('scroll', recordOnInteraction, { passive: true, once: true });
+    return cleanup;
   }, [activeRoute]);
 
-  // Initialize Firebase connection probe, Analytics, and Public Hub real-time listener
+  // Public Hub hydration:
+  // - On public routes: fast zero-SDK Firestore REST fetch (no 467KB SDK, no hanging Listen/channel stream, no IndexedDB)
+  // - On /admin route: live real-time Firestore SDK onSnapshot stream
   useEffect(() => {
-    testConnection().catch(() => {});
-    initFirebaseAnalytics().catch(() => {});
+    if (activeRoute === 'admin') {
+      let cancelled = false;
+      let unsubPublic: (() => void) | null = null;
+      import('./services/firebaseHubService')
+        .then((svc) => {
+          if (cancelled) return;
+          unsubPublic = svc.subscribePublicHubAndLinks({
+            onConfigUpdate: (cloudConfig, meta) => {
+              startTransition(() => {
+                setKnownCloudLinkIds(meta.cloudLinkIds);
+                setCloudHydrated(true);
+                if (hasLocalAdminEditsRef.current) return;
+                if (meta.cloudSeeded) {
+                  setSiteConfig(cloudConfig);
+                  saveSiteConfigToStorage(cloudConfig);
+                } else if (meta.legacyDemoDetected) {
+                  setSiteConfig((prev) =>
+                    isUntouchedLegacyDemoHub(prev) ? DEFAULT_SITE_CONFIG : prev
+                  );
+                }
+              });
+            },
+          });
+        })
+        .catch(() => { });
+      return () => {
+        cancelled = true;
+        if (unsubPublic) unsubPublic();
+      };
+    }
 
-    const unsubPublic = subscribePublicHubAndLinks({
-      onConfigUpdate: (cloudConfig, meta) => {
-        setKnownCloudLinkIds(meta.cloudLinkIds);
-        if (hasLocalAdminEditsRef.current) {
-          return;
+    const controller = new AbortController();
+    fetchPublicHubAndLinksRest(controller.signal)
+      .then((res) => {
+        if (controller.signal.aborted) return;
+        startTransition(() => {
+          setKnownCloudLinkIds(res.cloudLinkIds);
+          setCloudHydrated(true);
+          if (res.cloudSeeded) {
+            setSiteConfig(res.config);
+            saveSiteConfigToStorage(res.config);
+          } else if (res.legacyDemoDetected) {
+            setSiteConfig((prev) =>
+              isUntouchedLegacyDemoHub(prev) ? DEFAULT_SITE_CONFIG : prev
+            );
+          }
+        });
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setCloudHydrated(true);
         }
-        if (meta.cloudSeeded) {
-          setSiteConfig(cloudConfig);
-          saveSiteConfigToStorage(cloudConfig);
-        } else if (meta.legacyDemoDetected) {
-          setSiteConfig((prev) =>
-            isUntouchedLegacyDemoHub(prev) ? DEFAULT_SITE_CONFIG : prev
-          );
-        }
-      },
-    });
+      });
 
     return () => {
-      unsubPublic();
+      controller.abort();
     };
-  }, []);
+  }, [activeRoute]);
 
-  // Strict Solo Owner Google Auth + UID Lock listener (with sequence counter to prevent async sign-out races)
+  // Strict Solo Owner Google Auth + UID Lock listener — lazy-loaded ONLY on /admin
   useEffect(() => {
+    if (activeRoute !== 'admin') {
+      return;
+    }
+
+    let cancelled = false;
     let authSeq = 0;
+    let unsubAuth: (() => void) | null = null;
     let unsubPasskeys: (() => void) | null = null;
 
-    const unsubAuth = onAuthStateChanged(auth, async (firebaseUser) => {
-      const mySeq = ++authSeq;
-      if (unsubPasskeys) {
-        unsubPasskeys();
-        unsubPasskeys = null;
-      }
-
-      setCurrentUser(firebaseUser);
-
-      if (!firebaseUser) {
-        if (isLocalhostTestAdmin()) {
-          setGuardEvaluation({ authorized: true, status: 'authorized' });
-          setAuthLoading(false);
-          return;
-        }
-        setGuardEvaluation(evaluateAdminAccessGuard({ user: null }));
-        setMessages([]);
-        setSubscribers([]);
-        setAnalyticsEvents([]);
-        setPasskeys([]);
-        setBiometricUnlocked(false);
-        setAuthLoading(false);
-        return;
-      }
-
-      setAuthLoading(true);
+    void (async () => {
       try {
-        const { evaluation } = await verifyAndLockSoloOwner(firebaseUser);
-        if (mySeq !== authSeq) return;
-        setGuardEvaluation(evaluation);
+        const [fb, hubSvc] = await Promise.all([
+          import('./services/firebase'),
+          import('./services/firebaseHubService'),
+        ]);
+        if (cancelled) return;
 
-        if (evaluation.authorized) {
-          unsubPasskeys = subscribeAdminPasskeys(firebaseUser.uid, setPasskeys);
-        } else {
-          setMessages([]);
-          setSubscribers([]);
-          setAnalyticsEvents([]);
-          setPasskeys([]);
-          setBiometricUnlocked(false);
-        }
-      } catch {
-        if (mySeq !== authSeq) return;
-        setGuardEvaluation({
-          authorized: false,
-          status: 'uid_lock_mismatch',
-          reason: 'Unable to verify solo owner lock against Firestore.',
+        fb.testConnection().catch(() => { });
+        const { auth, authModule } = await fb.getFirebaseAuthBundle();
+        if (cancelled) return;
+
+        // Resolve mobile PWA redirect sign-in if returning from Google OAuth
+        hubSvc
+          .completePendingGoogleRedirect()
+          .then((redirectUser) => {
+            if (!cancelled && redirectUser) {
+              setBiometricUnlocked(true);
+            }
+          })
+          .catch(() => { });
+
+        unsubAuth = authModule.onAuthStateChanged(auth, async (firebaseUser) => {
+          const mySeq = ++authSeq;
+          if (unsubPasskeys) {
+            unsubPasskeys();
+            unsubPasskeys = null;
+          }
+
+          setCurrentUser(firebaseUser);
+
+          if (!firebaseUser) {
+            if (isLocalhostTestAdmin()) {
+              setGuardEvaluation({ authorized: true, status: 'authorized' });
+              setAuthLoading(false);
+              return;
+            }
+            setGuardEvaluation(fb.evaluateAdminAccessGuard({ user: null }));
+            setMessages([]);
+            setSubscribers([]);
+            setAnalyticsEvents([]);
+            setPasskeys([]);
+            setBiometricUnlocked(false);
+            setAuthLoading(false);
+            return;
+          }
+
+          setAuthLoading(true);
+          try {
+            const { evaluation } = await hubSvc.verifyAndLockSoloOwner(firebaseUser);
+            if (cancelled || mySeq !== authSeq) return;
+            setGuardEvaluation(evaluation);
+
+            if (evaluation.authorized) {
+              unsubPasskeys = hubSvc.subscribeAdminPasskeys(firebaseUser.uid, setPasskeys);
+            } else {
+              setMessages([]);
+              setSubscribers([]);
+              setAnalyticsEvents([]);
+              setPasskeys([]);
+              setBiometricUnlocked(false);
+            }
+          } catch {
+            if (cancelled || mySeq !== authSeq) return;
+            setGuardEvaluation({
+              authorized: false,
+              status: 'uid_lock_mismatch',
+              reason: 'Unable to verify solo owner lock against Firestore.',
+            });
+          } finally {
+            if (!cancelled && mySeq === authSeq) {
+              setAuthLoading(false);
+            }
+          }
         });
-      } finally {
-        if (mySeq === authSeq) {
+      } catch {
+        if (!cancelled) {
           setAuthLoading(false);
         }
       }
-    });
+    })();
 
     return () => {
+      cancelled = true;
       authSeq += 1;
-      unsubAuth();
+      if (unsubAuth) unsubAuth();
       if (unsubPasskeys) unsubPasskeys();
     };
-  }, []);
+  }, [activeRoute]);
 
   const biometricLockRequired =
     guardEvaluation.authorized &&
     biometricLockEnabled &&
     !biometricUnlocked &&
     (passkeys.length > 0 ||
-      loadPairedDevicePasskeys(OWNER_ADMIN_EMAIL).length > 0);
+      loadPairedDevicePasskeys(PUBLIC_OWNER_ADMIN_EMAIL).length > 0);
 
   // Subscribe to private admin inbox & telemetry ONLY after full auth + biometric unlock
   useEffect(() => {
@@ -429,15 +537,53 @@ function AppContent() {
       setAnalyticsEvents([]);
       return;
     }
-    const unsubAdminData = subscribeAdminInboxAndTelemetry({
-      onMessages: setMessages,
-      onSubscribers: setSubscribers,
-      onAnalyticsEvents: setAnalyticsEvents,
-    });
+    let cancelled = false;
+    let unsubAdminData: (() => void) | null = null;
+    import('./services/firebaseHubService')
+      .then((svc) => {
+        if (cancelled) return;
+        unsubAdminData = svc.subscribeAdminInboxAndTelemetry({
+          onMessages: setMessages,
+          onSubscribers: setSubscribers,
+          onAnalyticsEvents: setAnalyticsEvents,
+        });
+      })
+      .catch(() => { });
     return () => {
-      unsubAdminData();
+      cancelled = true;
+      if (unsubAdminData) unsubAdminData();
     };
   }, [currentUser, guardEvaluation.authorized, biometricLockRequired]);
+
+  // Defer heavy 365-cell GitHub SVG calendar mount until scrolled near viewport
+  useEffect(() => {
+    if (githubInView || activeRoute !== 'hub' || !cloudHydrated) return;
+    const node = githubSectionRef.current;
+    if (!node || typeof IntersectionObserver === 'undefined') {
+      setGithubInView(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          startTransition(() => setGithubInView(true));
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '120px 0px' }
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [githubInView, activeRoute, cloudHydrated]);
+
+  // Register public WebMCP tools (Imperative API) for AI agents on non-admin routes
+  useEffect(() => {
+    if (activeRoute === 'admin') return;
+    return registerPublicWebMcpTools({
+      getConfig: () => siteConfigRef.current,
+      onNavigateSection: (section) => setActiveRoute(section),
+    });
+  }, [activeRoute]);
 
   // Persist preview draft locally for instant reload smoothness
   useEffect(() => {
@@ -482,21 +628,21 @@ function AppContent() {
   const hubConfigured = isHubConfigured(siteConfig);
   const hasBioContent = Boolean(
     profile.bioPrefix.trim() ||
-      profile.bioCode.trim() ||
-      profile.bioMiddle.trim() ||
-      profile.bioLinkText.trim() ||
-      profile.bioSuffix.trim()
+    profile.bioCode.trim() ||
+    profile.bioMiddle.trim() ||
+    profile.bioLinkText.trim() ||
+    profile.bioSuffix.trim()
   );
   const footerGoogleMapsUrl = buildGoogleMapsExternalUrl(profile);
   const hasAnyRelevantFooterLink = Boolean(
     profile.githubUsername.trim() ||
-      hasAnyMapLocationData(profile) ||
-      profile.email.trim() ||
-      links.length > 0
+    hasAnyMapLocationData(profile) ||
+    profile.email.trim() ||
+    links.length > 0
   );
 
   const handleCopyEmail = () => {
-    navigator.clipboard?.writeText(profile.email).catch(() => {});
+    navigator.clipboard?.writeText(profile.email).catch(() => { });
     setEmailCopied(true);
     setTimeout(() => setEmailCopied(false), 2000);
   };
@@ -510,24 +656,33 @@ function AppContent() {
       ),
     }));
     if (targetLink) {
-      trackPublicLinkClick({
-        link: targetLink,
-        cloudLinkExists: knownCloudLinkIds.includes(targetLink.id),
-        source: 'bento',
-      }).catch(() => {});
+      import('./services/firebaseHubService')
+        .then((svc) =>
+          svc.trackPublicLinkClick({
+            link: targetLink,
+            cloudLinkExists: knownCloudLinkIds.includes(targetLink.id),
+            source: 'bento',
+          })
+        )
+        .catch(() => { });
     }
   };
 
   const handleAddMessage = async (msg: Omit<StoredMessage, 'id' | 'timestamp'>): Promise<void> => {
-    await submitVisitorMessageToFirestore(msg);
+    const svc = await import('./services/firebaseHubService');
+    await svc.submitVisitorMessageToFirestore(msg);
   };
 
   const handleDeleteMessage = (id: string) => {
-    deleteAdminMessageFromFirestore(id).catch(() => {});
+    import('./services/firebaseHubService')
+      .then((svc) => svc.deleteAdminMessageFromFirestore(id))
+      .catch(() => { });
   };
 
   const handleToggleMessageRead = (id: string, nextRead: boolean) => {
-    toggleAdminMessageRead(id, nextRead).catch(() => {});
+    import('./services/firebaseHubService')
+      .then((svc) => svc.toggleAdminMessageRead(id, nextRead))
+      .catch(() => { });
   };
 
   const handleHubContactSubmit = async (e: React.FormEvent) => {
@@ -582,7 +737,8 @@ function AppContent() {
   };
 
   const handleSubscribe = async (name: string, email: string): Promise<void> => {
-    await submitSubscriberToFirestore(name, email);
+    const svc = await import('./services/firebaseHubService');
+    await svc.submitSubscriberToFirestore(name, email);
   };
 
   const rootThemeStyle = {
@@ -600,9 +756,8 @@ function AppContent() {
 
   return (
     <div
-      className={`min-h-screen relative selection:bg-[#A88462] selection:text-[#FAF6F0] ${
-        designSystem.textureEnabled ? 'bg-espresso-canvas' : ''
-      }`}
+      className={`min-h-screen relative selection:bg-[#A88462] selection:text-[#FAF6F0] ${designSystem.textureEnabled ? 'bg-espresso-canvas' : ''
+        }`}
       style={rootThemeStyle}
     >
       {showLoadingScreen && (
@@ -642,11 +797,10 @@ function AppContent() {
             <button
               type="button"
               onClick={() => setActiveRoute(activeRoute === 'work' ? 'hub' : 'work')}
-              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-semibold shadow-md transition-all whitespace-nowrap shrink-0 cursor-pointer ${
-                activeRoute === 'work'
-                  ? 'bg-[#3A2418] text-[#FAF6F0]'
-                  : 'bg-[#FAF6F0] text-[#1A120E] hover:bg-[#D5C4AE]'
-              }`}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-semibold shadow-md transition-all whitespace-nowrap shrink-0 cursor-pointer ${activeRoute === 'work'
+                ? 'bg-[#3A2418] text-[#FAF6F0]'
+                : 'bg-[#FAF6F0] text-[#1A120E] hover:bg-[#D5C4AE]'
+                }`}
             >
               <Briefcase className="w-3.5 h-3.5" />
               <span>Work with me</span>
@@ -666,11 +820,10 @@ function AppContent() {
               onClick={() => setActiveRoute(activeRoute === 'posts' ? 'hub' : 'posts')}
               aria-label="Read posts"
               title="Read posts"
-              className={`w-9 h-9 rounded-full flex items-center justify-center shadow-md transition-all shrink-0 cursor-pointer ${
-                activeRoute === 'posts'
-                  ? 'bg-[#3A2418] text-[#FAF6F0]'
-                  : 'bg-[#FAF6F0] text-[#1A120E] hover:bg-[#D5C4AE]'
-              }`}
+              className={`w-9 h-9 rounded-full flex items-center justify-center shadow-md transition-all shrink-0 cursor-pointer ${activeRoute === 'posts'
+                ? 'bg-[#3A2418] text-[#FAF6F0]'
+                : 'bg-[#FAF6F0] text-[#1A120E] hover:bg-[#D5C4AE]'
+                }`}
             >
               <FileText className="w-4 h-4" />
             </button>
@@ -806,12 +959,12 @@ function AppContent() {
                   style={
                     item.active
                       ? {
-                          backgroundColor: designSystem.secondarySurface,
-                          color: '#FAF6F0',
-                        }
+                        backgroundColor: designSystem.secondarySurface,
+                        color: '#FAF6F0',
+                      }
                       : {
-                          color: designSystem.primaryText,
-                        }
+                        color: designSystem.primaryText,
+                      }
                   }
                 >
                   {item.icon}
@@ -827,42 +980,50 @@ function AppContent() {
 
       {/* ROUTE SWITCHING */}
       {activeRoute === 'admin' && (
-        <AdminAuthGate
-          authLoading={authLoading}
-          currentUser={currentUser}
-          guardEvaluation={guardEvaluation}
-          ownerEmail={OWNER_ADMIN_EMAIL}
-          passkeys={passkeys}
-          biometricLockRequired={biometricLockRequired}
-          onBiometricUnlockSuccess={async ({ credentialId, nextSignCount, deviceLabel }) => {
-            setBiometricUnlocked(true);
-            touchAdminPasskeyUsage({
-              credentialId,
-              nextSignCount,
-              deviceLabel,
-            }).catch(() => {});
-          }}
-          onSignInWithGoogle={async () => {
-            await signInOwnerWithGoogle();
-            setBiometricUnlocked(true);
-          }}
-          onSignOut={async () => {
-            setBiometricUnlocked(false);
-            await signOutOwner();
-          }}
-          onBackToHub={navigateBackToHub}
+        <Suspense
+          fallback={
+            <div className="min-h-screen flex items-center justify-center font-ibm-mono text-xs text-[#FAF6F0]">
+              Loading Link Hub Studio...
+            </div>
+          }
         >
-          <Suspense
-            fallback={
-              <div className="min-h-screen flex items-center justify-center font-ibm-mono text-xs text-[#FAF6F0]">
-                Loading Link Hub Studio...
-              </div>
-            }
+          <AdminAuthGate
+            authLoading={authLoading}
+            currentUser={currentUser}
+            guardEvaluation={guardEvaluation}
+            ownerEmail={PUBLIC_OWNER_ADMIN_EMAIL}
+            passkeys={passkeys}
+            biometricLockRequired={biometricLockRequired}
+            onBiometricUnlockSuccess={async ({ credentialId, nextSignCount, deviceLabel }) => {
+              setBiometricUnlocked(true);
+              import('./services/firebaseHubService')
+                .then((svc) =>
+                  svc.touchAdminPasskeyUsage({
+                    credentialId,
+                    nextSignCount,
+                    deviceLabel,
+                  })
+                )
+                .catch(() => { });
+            }}
+            onSignInWithGoogle={async () => {
+              const svc = await import('./services/firebaseHubService');
+              const signedUser = await svc.signInOwnerWithGoogle();
+              if (signedUser) {
+                setBiometricUnlocked(true);
+              }
+            }}
+            onSignOut={async () => {
+              setBiometricUnlocked(false);
+              const svc = await import('./services/firebaseHubService');
+              await svc.signOutOwner();
+            }}
+            onBackToHub={navigateBackToHub}
           >
             <AdminPage
               config={siteConfig}
               ownerUid={currentUser?.uid || ''}
-              ownerEmail={currentUser?.email || OWNER_ADMIN_EMAIL}
+              ownerEmail={currentUser?.email || PUBLIC_OWNER_ADMIN_EMAIL}
               knownCloudLinkIds={knownCloudLinkIds}
               analyticsEvents={analyticsEvents}
               messages={messages}
@@ -881,30 +1042,47 @@ function AppContent() {
               onToggleMessageRead={handleToggleMessageRead}
               onSignOut={async () => {
                 setBiometricUnlocked(false);
-                await signOutOwner();
+                const svc = await import('./services/firebaseHubService');
+                await svc.signOutOwner();
               }}
               onBackToHub={navigateBackToHub}
             />
-          </Suspense>
-        </AdminAuthGate>
+          </AdminAuthGate>
+        </Suspense>
       )}
 
       {activeRoute === 'work' && (
-        <WorkWithMeView
-          profile={profile}
-          avatarUrl={profile.avatarUrl}
-          onBack={() => setActiveRoute('hub')}
-          onSubmitMessage={handleAddMessage}
-        />
+        <Suspense
+          fallback={
+            <div className="min-h-screen flex items-center justify-center font-ibm-mono text-xs text-[#FAF6F0]">
+              Loading Work With Me...
+            </div>
+          }
+        >
+          <WorkWithMeView
+            profile={profile}
+            avatarUrl={profile.avatarUrl}
+            onBack={() => setActiveRoute('hub')}
+            onSubmitMessage={handleAddMessage}
+          />
+        </Suspense>
       )}
 
       {activeRoute === 'posts' && (
-        <PostsView
-          profile={profile}
-          posts={posts}
-          avatarUrl={profile.avatarUrl}
-          onBack={() => setActiveRoute('hub')}
-        />
+        <Suspense
+          fallback={
+            <div className="min-h-screen flex items-center justify-center font-ibm-mono text-xs text-[#FAF6F0]">
+              Loading Posts...
+            </div>
+          }
+        >
+          <PostsView
+            profile={profile}
+            posts={posts}
+            avatarUrl={profile.avatarUrl}
+            onBack={() => setActiveRoute('hub')}
+          />
+        </Suspense>
       )}
 
       {activeRoute === 'pass' && (
@@ -955,6 +1133,8 @@ function AppContent() {
                         src={profile.bannerImageUrl}
                         alt={profile.name.trim() ? `${profile.name} cover banner` : 'Cover banner'}
                         referrerPolicy="no-referrer"
+                        fetchPriority="high"
+                        decoding="async"
                         className="w-full h-full object-cover"
                       />
                       <div className="absolute inset-0 bg-gradient-to-t from-[#1A120E]/45 via-transparent to-transparent pointer-events-none" />
@@ -1025,13 +1205,30 @@ function AppContent() {
                   <img
                     src={profile.avatarUrl}
                     alt={profile.name.trim() || 'Profile avatar'}
+                    width={72}
+                    height={72}
                     referrerPolicy="no-referrer"
+                    fetchPriority="high"
+                    decoding="async"
                     className="w-full h-full rounded-full object-cover"
                   />
                 </div>
               </div>
 
-              {!hubConfigured ? (
+              {!hubConfigured && !cloudHydrated ? (
+                <div
+                  aria-busy="true"
+                  className="space-y-3 px-1 min-h-[168px]"
+                >
+                  <div className="h-6 w-48 rounded-lg bg-[#D5C4AE]/45 animate-pulse" />
+                  <div className="h-4 w-64 rounded-md bg-[#D5C4AE]/35 animate-pulse" />
+                  <div className="space-y-2 pt-1">
+                    <div className="h-3.5 w-full rounded bg-[#D5C4AE]/35 animate-pulse" />
+                    <div className="h-3.5 w-11/12 rounded bg-[#D5C4AE]/35 animate-pulse" />
+                    <div className="h-3.5 w-3/4 rounded bg-[#D5C4AE]/30 animate-pulse" />
+                  </div>
+                </div>
+              ) : !hubConfigured ? (
                 <div
                   className="p-4 rounded-2xl border space-y-2.5"
                   style={{
@@ -1168,388 +1365,445 @@ function AppContent() {
             </header>
 
             {/* 2. SOCIAL LINKS ROW */}
-            {socials.length > 0 && (
+            {cloudHydrated && socials.length > 0 && (
               <div className="flex flex-wrap items-center gap-2.5 px-1">
                 {socials.map((social) => {
                   const safeSocialUrl = safeHttpHref(social.url);
                   if (!safeSocialUrl) return null;
                   return (
-                  <a
-                    key={social.id}
-                    href={safeSocialUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    aria-label={social.label}
-                    title={`${social.label} (${social.handle})`}
-                    style={{
-                      backgroundColor: designSystem.secondarySurface,
-                      borderColor: designSystem.accentPrimary,
-                    }}
-                    className="w-11 h-11 sm:w-9 sm:h-9 rounded-full border hover:opacity-90 active:scale-95 text-[#FAF6F0] flex items-center justify-center shadow-xs transition-all duration-150 hover:-translate-y-0.5"
-                  >
-                    <BrandIcon platform={social.platform} className="w-[18px] h-[18px] sm:w-4 sm:h-4" />
-                  </a>
+                    <a
+                      key={social.id}
+                      href={safeSocialUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label={social.label}
+                      title={`${social.label} (${social.handle})`}
+                      style={{
+                        backgroundColor: designSystem.secondarySurface,
+                        borderColor: designSystem.accentPrimary,
+                      }}
+                      className="w-11 h-11 sm:w-9 sm:h-9 rounded-full border hover:opacity-90 active:scale-95 text-[#FAF6F0] flex items-center justify-center shadow-xs transition-all duration-150 hover:-translate-y-0.5"
+                    >
+                      <BrandIcon platform={social.platform} className="w-[18px] h-[18px] sm:w-4 sm:h-4" />
+                    </a>
                   );
                 })}
               </div>
             )}
 
-            {/* Hairline Dashed Divider */}
-            {(hubConfigured || siteConfig.showGithubSection) && (
-              <div className="border-t border-dashed" style={{ borderColor: designSystem.borderColor }} />
-            )}
-
-            {/* 3. REAL INTERACTIVE GITHUB CONTRIBUTION HEATMAP */}
-            {siteConfig.showGithubSection && (
-              <GitHubActivity
-                username={profile.githubUsername}
-                repo={profile.githubRepo}
-                profileUrl={profile.githubProfileUrl}
-                title={profile.githubSectionTitle}
-                subtitle={profile.githubSectionSubtitle}
-                themeColors={[
-                  '#EFE6DA',
-                  designSystem.borderColor,
-                  designSystem.accentSecondary,
-                  designSystem.accentPrimary,
-                  designSystem.secondarySurface,
-                ]}
-              />
-            )}
-
-            {/* 4. MY LINKS BENTO + SONG CARD + LOCATION MAP */}
-            {(hubConfigured || links.length > 0 || siteConfig.showSongCard || siteConfig.showMapCard) && (
-              <LinkBentoSection
-                links={links}
-                customCategories={siteConfig.customCategories}
-                featuredSong={featuredSong}
-                location={profile.location}
-                mapLabel={profile.mapLabel}
-                coordinates={profile.coordinates}
-                googleMapsUrl={profile.googleMapsUrl}
-                mapLat={profile.mapLat}
-                mapLng={profile.mapLng}
-                mapZoom={profile.mapZoom}
-                gmpQuotaExceeded={gmpQuotaExceeded}
-                showSongCard={siteConfig.showSongCard}
-                showMapCard={siteConfig.showMapCard}
-                onRecordClick={handleRecordLinkClick}
-              />
-            )}
-
-            {/* 5. CONTACT ME EMBEDDED FORM */}
-            {siteConfig.showContactSection && (
+            {!cloudHydrated ? (
+              <div aria-hidden="true" className="space-y-4 min-h-[580px]">
+                <div className="flex items-center gap-2.5 px-1">
+                  <div className="w-10 h-10 rounded-full bg-[#D5C4AE]/40 animate-pulse" />
+                  <div className="w-10 h-10 rounded-full bg-[#D5C4AE]/40 animate-pulse" />
+                  <div className="w-10 h-10 rounded-full bg-[#D5C4AE]/40 animate-pulse" />
+                </div>
+                <div className="h-[190px] rounded-2xl bg-[#D5C4AE]/25 animate-pulse" />
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="h-44 rounded-2xl bg-[#D5C4AE]/25 animate-pulse" />
+                  <div className="h-44 rounded-2xl bg-[#D5C4AE]/25 animate-pulse" />
+                </div>
+              </div>
+            ) : (
               <>
-                <div
-                  className="border-t border-dashed"
-                  style={{ borderColor: designSystem.borderColor }}
-                />
+                {/* Hairline Dashed Divider */}
+                {(hubConfigured || siteConfig.showGithubSection) && (
+                  <div className="border-t border-dashed" style={{ borderColor: designSystem.borderColor }} />
+                )}
 
-                <section aria-labelledby="contact-heading" className="space-y-2.5">
-                  <div className="flex items-baseline justify-between gap-2">
-                    <h2
-                      id="contact-heading"
-                      className="text-[15px] sm:text-sm font-bold"
-                      style={{ color: designSystem.primaryText }}
-                    >
-                      Contact me
-                    </h2>
-                    <p
-                      className="text-xs font-medium"
-                      style={{ color: designSystem.secondarySurface }}
-                    >
-                      Send me a message
-                    </p>
-                  </div>
-
-                  {contactSuccess && (
-                    <div
-                      role="status"
-                      className="p-2.5 rounded-xl bg-[#FAF6F0] border border-[#6B4A2E] text-xs font-semibold text-[#1A120E] flex items-center justify-between"
-                    >
-                      <span>Thanks for reaching out! Your message has been sent.</span>
-                    </div>
-                  )}
-
-                  {contactGuardError && (
-                    <div
-                      role="alert"
-                      className="p-2.5 rounded-xl bg-[#FAF6F0] border border-[#3A2418] text-xs font-semibold text-[#3A2418]"
-                    >
-                      {contactGuardError}
-                    </div>
-                  )}
-
-                  <form onSubmit={handleHubContactSubmit} noValidate className="space-y-2.5">
-                    {/* Hidden anti-spam honeypot field */}
-                    <div className="sr-only" aria-hidden="true">
-                      <label htmlFor="hub-website-hp">Website</label>
-                      <input
-                        id="hub-website-hp"
-                        type="text"
-                        tabIndex={-1}
-                        autoComplete="off"
-                        value={contactHoneypot}
-                        onChange={(e) => setContactHoneypot(e.target.value)}
-                      />
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                      <div className="space-y-1">
-                        <label
-                          htmlFor="hub-name"
-                          className="block text-[13px] sm:text-xs font-bold"
-                          style={{ color: designSystem.primaryText }}
-                        >
-                          Your name <span style={{ color: designSystem.accentPrimary }}>*</span>
-                        </label>
-                        <input
-                          id="hub-name"
-                          type="text"
-                          value={contactName}
-                          onChange={(e) => setContactName(e.target.value)}
-                          placeholder="Your full name"
-                          style={{
-                            backgroundColor: designSystem.innerCardBg,
-                            borderColor: designSystem.borderColor,
-                            color: designSystem.primaryText,
-                          }}
-                          className="w-full h-10 sm:h-9 px-3 py-1.5 rounded-xl border focus:outline-none text-[12.5px] sm:text-xs font-medium placeholder-[#5C3D24] transition-all"
-                        />
-                        {contactErrors.name && (
-                          <p
-                            className="text-[11px] font-semibold"
-                            style={{ color: designSystem.secondarySurface }}
-                          >
-                            {contactErrors.name}
-                          </p>
-                        )}
-                      </div>
-
-                      <div className="space-y-1">
-                        <label
-                          htmlFor="hub-email"
-                          className="block text-[13px] sm:text-xs font-bold"
-                          style={{ color: designSystem.primaryText }}
-                        >
-                          Your email <span style={{ color: designSystem.accentPrimary }}>*</span>
-                        </label>
-                        <input
-                          id="hub-email"
-                          type="email"
-                          value={contactEmail}
-                          onChange={(e) => setContactEmail(e.target.value)}
-                          placeholder="name@example.com"
-                          style={{
-                            backgroundColor: designSystem.innerCardBg,
-                            borderColor: designSystem.borderColor,
-                            color: designSystem.primaryText,
-                          }}
-                          className="w-full h-10 sm:h-9 px-3 py-1.5 rounded-xl border focus:outline-none text-[12.5px] sm:text-xs font-medium placeholder-[#5C3D24] transition-all"
-                        />
-                        {contactErrors.email && (
-                          <p
-                            className="text-[11px] font-semibold"
-                            style={{ color: designSystem.secondarySurface }}
-                          >
-                            {contactErrors.email}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="space-y-1">
-                      <label
-                        htmlFor="hub-message"
-                        className="block text-[13px] sm:text-xs font-bold"
-                        style={{ color: designSystem.primaryText }}
+                {/* 3. REAL INTERACTIVE GITHUB CONTRIBUTION HEATMAP */}
+                {siteConfig.showGithubSection && (
+                  <div ref={githubSectionRef} className="lh-defer-section min-h-[210px]">
+                    {githubInView ? (
+                      <Suspense
+                        fallback={
+                          <div
+                            className="h-[210px] rounded-2xl border animate-pulse"
+                            style={{
+                              backgroundColor: designSystem.innerCardBg,
+                              borderColor: designSystem.borderColor,
+                            }}
+                          />
+                        }
                       >
-                        Message <span style={{ color: designSystem.accentPrimary }}>*</span>
-                      </label>
-                      <textarea
-                        id="hub-message"
-                        rows={2}
-                        value={contactMessage}
-                        onChange={(e) => setContactMessage(e.target.value)}
-                        placeholder="What's on your mind?"
+                        <GitHubActivity
+                          username={profile.githubUsername}
+                          repo={profile.githubRepo}
+                          profileUrl={profile.githubProfileUrl}
+                          title={profile.githubSectionTitle}
+                          subtitle={profile.githubSectionSubtitle}
+                          themeColors={[
+                            '#EFE6DA',
+                            designSystem.borderColor,
+                            designSystem.accentSecondary,
+                            designSystem.accentPrimary,
+                            designSystem.secondarySurface,
+                          ]}
+                        />
+                      </Suspense>
+                    ) : (
+                      <div
+                        className="h-[210px] rounded-2xl border"
                         style={{
                           backgroundColor: designSystem.innerCardBg,
                           borderColor: designSystem.borderColor,
-                          color: designSystem.primaryText,
                         }}
-                        className="w-full px-3 py-2 rounded-xl border focus:outline-none text-[12.5px] sm:text-xs font-medium placeholder-[#5C3D24] transition-all resize-none"
                       />
-                      {contactErrors.message && (
-                        <p
-                          className="text-[11px] font-semibold"
-                          style={{ color: designSystem.secondarySurface }}
-                        >
-                          {contactErrors.message}
-                        </p>
-                      )}
-                    </div>
-
-                    <button
-                      type="submit"
-                      disabled={contactSubmitting}
-                      style={{ backgroundColor: designSystem.primaryText }}
-                      className="w-full sm:w-auto h-10 sm:h-9 inline-flex items-center justify-center gap-1.5 px-4 py-1.5 rounded-xl hover:opacity-90 disabled:opacity-60 text-[#FAF6F0] text-xs font-semibold shadow-xs transition-all cursor-pointer"
-                    >
-                      <Send className="w-3.5 h-3.5" />
-                      <span>{contactSubmitting ? 'Sending...' : 'Send'}</span>
-                    </button>
-                  </form>
-                </section>
-              </>
-            )}
-
-            {/* 6. COMPACT FOOTER SECTION (Distinct Exterior Shade + Relevant Links & Google Maps) */}
-            <footer
-              aria-label="Footer navigation and links"
-              className="rounded-2xl border p-3.5 sm:p-4 space-y-3 shadow-xs text-[#FAF6F0]"
-              style={{
-                backgroundColor: designSystem.secondarySurface,
-                borderColor: designSystem.accentPrimary,
-              }}
-            >
-              <div className="space-y-3">
-                <div className="space-y-1.5">
-                  <p className="font-ibm-mono text-[10px] font-bold uppercase tracking-wider text-[#D5C4AE]">
-                    Quick Options
-                  </p>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setActiveRoute('work')}
-                      className="px-2.5 py-1 rounded-lg border border-[#FAF6F0]/25 bg-[#FAF6F0]/10 hover:bg-[#FAF6F0]/20 text-[11px] font-semibold text-[#FAF6F0] transition-colors cursor-pointer"
-                    >
-                      Work with me
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setActiveRoute('posts')}
-                      className="px-2.5 py-1 rounded-lg border border-[#FAF6F0]/25 bg-[#FAF6F0]/10 hover:bg-[#FAF6F0]/20 text-[11px] font-semibold text-[#FAF6F0] transition-colors cursor-pointer"
-                    >
-                      Read posts
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setActiveRoute('pass')}
-                      className="px-2.5 py-1 rounded-lg border border-[#FAF6F0]/25 bg-[#FAF6F0]/10 hover:bg-[#FAF6F0]/20 text-[11px] font-semibold text-[#FAF6F0] transition-colors cursor-pointer"
-                    >
-                      Digital pass
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setShowUpdatesModal(true)}
-                      className="px-2.5 py-1 rounded-lg border border-[#FAF6F0]/25 bg-[#FAF6F0]/10 hover:bg-[#FAF6F0]/20 text-[11px] font-semibold text-[#FAF6F0] transition-colors cursor-pointer"
-                    >
-                      Get updates
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setShowShareModal(true)}
-                      className="px-2.5 py-1 rounded-lg border border-[#FAF6F0]/25 bg-[#FAF6F0]/10 hover:bg-[#FAF6F0]/20 text-[11px] font-semibold text-[#FAF6F0] transition-colors cursor-pointer"
-                    >
-                      Share hub
-                    </button>
-                  </div>
-                </div>
-
-                {hasAnyRelevantFooterLink && (
-                  <div className="space-y-1.5">
-                    <p className="font-ibm-mono text-[10px] font-bold uppercase tracking-wider text-[#D5C4AE]">
-                      Relevant Links
-                    </p>
-                    <ul className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] font-semibold text-[#FAF6F0]">
-                      {profile.githubUsername.trim() && (
-                        <li className="min-w-0">
-                          <a
-                            href={
-                              profile.githubRepo
-                                ? `https://github.com/${encodeURIComponent(profile.githubUsername)}/${encodeURIComponent(profile.githubRepo)}`
-                                : safeHttpHref(profile.githubProfileUrl) ||
-                                  `https://github.com/${encodeURIComponent(profile.githubUsername)}`
-                            }
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 py-0.5 text-[#FAF6F0] hover:text-[#D5C4AE] hover:underline max-w-full"
-                          >
-                            <span className="truncate">
-                              GitHub (@{profile.githubUsername}
-                              {profile.githubRepo ? `/${profile.githubRepo}` : ''})
-                            </span>
-                            <ExternalLink className="w-3 h-3 opacity-80 shrink-0" />
-                          </a>
-                        </li>
-                      )}
-                      {footerGoogleMapsUrl && (
-                        <li className="min-w-0">
-                          <a
-                            href={footerGoogleMapsUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 py-0.5 text-[#FAF6F0] hover:text-[#D5C4AE] hover:underline max-w-full"
-                          >
-                            <MapPin className="w-3 h-3 opacity-85 shrink-0" />
-                            <span className="truncate">
-                              Google Maps{profile.location.trim() ? ` (${profile.location.trim()})` : ''}
-                            </span>
-                            <ExternalLink className="w-3 h-3 opacity-80 shrink-0" />
-                          </a>
-                        </li>
-                      )}
-                      {profile.email.trim() && (
-                        <li className="min-w-0">
-                          <a
-                            href={`mailto:${profile.email}`}
-                            className="inline-flex items-center gap-1 py-0.5 text-[#FAF6F0] hover:text-[#D5C4AE] hover:underline max-w-full"
-                          >
-                            <span className="truncate">{profile.email}</span>
-                            <ExternalLink className="w-3 h-3 opacity-80 shrink-0" />
-                          </a>
-                        </li>
-                      )}
-                      {links.slice(0, 2).map((topLink, idx) => (
-                        <li
-                          key={`footer-${topLink.id}`}
-                          className={`min-w-0 ${idx === 1 ? 'col-span-2' : ''}`}
-                        >
-                          <a
-                            href={safeHttpHref(topLink.url) || '#'}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 py-0.5 text-[#FAF6F0]/90 hover:text-[#FAF6F0] hover:underline max-w-full"
-                          >
-                            <span className="truncate">{topLink.title}</span>
-                            <ExternalLink className="w-3 h-3 opacity-80 shrink-0" />
-                          </a>
-                        </li>
-                      ))}
-                    </ul>
+                    )}
                   </div>
                 )}
-              </div>
 
-              <div className="pt-2.5 border-t border-[#FAF6F0]/20 flex flex-wrap items-center justify-between gap-2 text-[10px] font-ibm-mono text-[#D5C4AE]">
-                <span>
-                  © {new Date().getFullYear()}{' '}
-                  {[profile.name.trim() || 'Link Hub', profile.location.trim()]
-                    .filter(Boolean)
-                    .join(' · ')}
-                </span>
-                <span className="font-semibold text-[#FAF6F0]">
-                  {designSystem.pantoneCode || 'PANTONE 19-1118 TCX'}
-                </span>
-              </div>
-            </footer>
+                {/* 4. MY LINKS BENTO + SONG CARD + LOCATION MAP */}
+                {(hubConfigured || links.length > 0 || siteConfig.showSongCard || siteConfig.showMapCard) && (
+                  <div className="lh-defer-section">
+                    <LinkBentoSection
+                      links={links}
+                      customCategories={siteConfig.customCategories}
+                      featuredSong={featuredSong}
+                      location={profile.location}
+                      mapLabel={profile.mapLabel}
+                      coordinates={profile.coordinates}
+                      googleMapsUrl={profile.googleMapsUrl}
+                      mapLat={profile.mapLat}
+                      mapLng={profile.mapLng}
+                      mapZoom={profile.mapZoom}
+                      gmpQuotaExceeded={gmpQuotaExceeded}
+                      showSongCard={siteConfig.showSongCard}
+                      showMapCard={siteConfig.showMapCard}
+                      onRecordClick={handleRecordLinkClick}
+                    />
+                  </div>
+                )}
+
+                {/* 5. CONTACT ME EMBEDDED FORM */}
+                {siteConfig.showContactSection && (
+                  <>
+                    <div
+                      className="border-t border-dashed"
+                      style={{ borderColor: designSystem.borderColor }}
+                    />
+
+                    <section aria-labelledby="contact-heading" className="space-y-2.5">
+                      <div className="flex items-baseline justify-between gap-2">
+                        <h2
+                          id="contact-heading"
+                          className="text-[15px] sm:text-sm font-bold"
+                          style={{ color: designSystem.primaryText }}
+                        >
+                          Contact me
+                        </h2>
+                        <p
+                          className="text-xs font-medium"
+                          style={{ color: designSystem.secondarySurface }}
+                        >
+                          Send me a message
+                        </p>
+                      </div>
+
+                      {contactSuccess && (
+                        <div
+                          role="status"
+                          className="p-2.5 rounded-xl bg-[#FAF6F0] border border-[#6B4A2E] text-xs font-semibold text-[#1A120E] flex items-center justify-between"
+                        >
+                          <span>Thanks for reaching out! Your message has been sent.</span>
+                        </div>
+                      )}
+
+                      {contactGuardError && (
+                        <div
+                          role="alert"
+                          className="p-2.5 rounded-xl bg-[#FAF6F0] border border-[#3A2418] text-xs font-semibold text-[#3A2418]"
+                        >
+                          {contactGuardError}
+                        </div>
+                      )}
+
+                      <form
+                        onSubmit={handleHubContactSubmit}
+                        noValidate
+                        toolname="send_contact_message"
+                        tooldescription="Send a direct contact message to the site owner for collaborations, hackathons, or project inquiries."
+                        className="space-y-2.5"
+                      >
+                        {/* Hidden anti-spam honeypot field */}
+                        <div className="sr-only" aria-hidden="true">
+                          <label htmlFor="hub-website-hp">Website</label>
+                          <input
+                            id="hub-website-hp"
+                            type="text"
+                            tabIndex={-1}
+                            autoComplete="off"
+                            value={contactHoneypot}
+                            onChange={(e) => setContactHoneypot(e.target.value)}
+                          />
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                          <div className="space-y-1">
+                            <label
+                              htmlFor="hub-name"
+                              className="block text-[13px] sm:text-xs font-bold"
+                              style={{ color: designSystem.primaryText }}
+                            >
+                              Your name <span style={{ color: designSystem.accentPrimary }}>*</span>
+                            </label>
+                            <input
+                              id="hub-name"
+                              name="name"
+                              type="text"
+                              required
+                              toolparamdescription="Sender's full name"
+                              value={contactName}
+                              onChange={(e) => setContactName(e.target.value)}
+                              placeholder="Your full name"
+                              style={{
+                                backgroundColor: designSystem.innerCardBg,
+                                borderColor: designSystem.borderColor,
+                                color: designSystem.primaryText,
+                              }}
+                              className="w-full h-10 sm:h-9 px-3 py-1.5 rounded-xl border focus:outline-none text-[12.5px] sm:text-xs font-medium placeholder-[#5C3D24] transition-all"
+                            />
+                            {contactErrors.name && (
+                              <p
+                                className="text-[11px] font-semibold"
+                                style={{ color: designSystem.secondarySurface }}
+                              >
+                                {contactErrors.name}
+                              </p>
+                            )}
+                          </div>
+
+                          <div className="space-y-1">
+                            <label
+                              htmlFor="hub-email"
+                              className="block text-[13px] sm:text-xs font-bold"
+                              style={{ color: designSystem.primaryText }}
+                            >
+                              Your email <span style={{ color: designSystem.accentPrimary }}>*</span>
+                            </label>
+                            <input
+                              id="hub-email"
+                              name="email"
+                              type="email"
+                              required
+                              toolparamdescription="Sender's valid email address for replies"
+                              value={contactEmail}
+                              onChange={(e) => setContactEmail(e.target.value)}
+                              placeholder="name@example.com"
+                              style={{
+                                backgroundColor: designSystem.innerCardBg,
+                                borderColor: designSystem.borderColor,
+                                color: designSystem.primaryText,
+                              }}
+                              className="w-full h-10 sm:h-9 px-3 py-1.5 rounded-xl border focus:outline-none text-[12.5px] sm:text-xs font-medium placeholder-[#5C3D24] transition-all"
+                            />
+                            {contactErrors.email && (
+                              <p
+                                className="text-[11px] font-semibold"
+                                style={{ color: designSystem.secondarySurface }}
+                              >
+                                {contactErrors.email}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="space-y-1">
+                          <label
+                            htmlFor="hub-message"
+                            className="block text-[13px] sm:text-xs font-bold"
+                            style={{ color: designSystem.primaryText }}
+                          >
+                            Message <span style={{ color: designSystem.accentPrimary }}>*</span>
+                          </label>
+                          <textarea
+                            id="hub-message"
+                            name="message"
+                            rows={2}
+                            required
+                            toolparamdescription="The message or collaboration inquiry text"
+                            value={contactMessage}
+                            onChange={(e) => setContactMessage(e.target.value)}
+                            placeholder="What's on your mind?"
+                            style={{
+                              backgroundColor: designSystem.innerCardBg,
+                              borderColor: designSystem.borderColor,
+                              color: designSystem.primaryText,
+                            }}
+                            className="w-full px-3 py-2 rounded-xl border focus:outline-none text-[12.5px] sm:text-xs font-medium placeholder-[#5C3D24] transition-all resize-none"
+                          />
+                          {contactErrors.message && (
+                            <p
+                              className="text-[11px] font-semibold"
+                              style={{ color: designSystem.secondarySurface }}
+                            >
+                              {contactErrors.message}
+                            </p>
+                          )}
+                        </div>
+
+                        <button
+                          type="submit"
+                          disabled={contactSubmitting}
+                          style={{ backgroundColor: designSystem.primaryText }}
+                          className="w-full sm:w-auto h-10 sm:h-9 inline-flex items-center justify-center gap-1.5 px-4 py-1.5 rounded-xl hover:opacity-90 disabled:opacity-60 text-[#FAF6F0] text-xs font-semibold shadow-xs transition-all cursor-pointer"
+                        >
+                          <Send className="w-3.5 h-3.5" />
+                          <span>{contactSubmitting ? 'Sending...' : 'Send'}</span>
+                        </button>
+                      </form>
+                    </section>
+                  </>
+                )}
+
+                {/* 6. COMPACT FOOTER SECTION (Distinct Exterior Shade + Relevant Links & Google Maps) */}
+                <footer
+                  aria-label="Footer navigation and links"
+                  className="rounded-2xl border p-3.5 sm:p-4 space-y-3 shadow-xs text-[#FAF6F0]"
+                  style={{
+                    backgroundColor: designSystem.secondarySurface,
+                    borderColor: designSystem.accentPrimary,
+                  }}
+                >
+                  <div className="space-y-3">
+                    <div className="space-y-1.5">
+                      <p className="font-ibm-mono text-[10px] font-bold uppercase tracking-wider text-[#D5C4AE]">
+                        Quick Options
+                      </p>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setActiveRoute('work')}
+                          className="px-2.5 py-1 rounded-lg border border-[#FAF6F0]/25 bg-[#FAF6F0]/10 hover:bg-[#FAF6F0]/20 text-[11px] font-semibold text-[#FAF6F0] transition-colors cursor-pointer"
+                        >
+                          Work with me
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setActiveRoute('posts')}
+                          className="px-2.5 py-1 rounded-lg border border-[#FAF6F0]/25 bg-[#FAF6F0]/10 hover:bg-[#FAF6F0]/20 text-[11px] font-semibold text-[#FAF6F0] transition-colors cursor-pointer"
+                        >
+                          Read posts
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setActiveRoute('pass')}
+                          className="px-2.5 py-1 rounded-lg border border-[#FAF6F0]/25 bg-[#FAF6F0]/10 hover:bg-[#FAF6F0]/20 text-[11px] font-semibold text-[#FAF6F0] transition-colors cursor-pointer"
+                        >
+                          Digital pass
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowUpdatesModal(true)}
+                          className="px-2.5 py-1 rounded-lg border border-[#FAF6F0]/25 bg-[#FAF6F0]/10 hover:bg-[#FAF6F0]/20 text-[11px] font-semibold text-[#FAF6F0] transition-colors cursor-pointer"
+                        >
+                          Get updates
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowShareModal(true)}
+                          className="px-2.5 py-1 rounded-lg border border-[#FAF6F0]/25 bg-[#FAF6F0]/10 hover:bg-[#FAF6F0]/20 text-[11px] font-semibold text-[#FAF6F0] transition-colors cursor-pointer"
+                        >
+                          Share hub
+                        </button>
+                      </div>
+                    </div>
+
+                    {hasAnyRelevantFooterLink && (
+                      <div className="space-y-1.5">
+                        <p className="font-ibm-mono text-[10px] font-bold uppercase tracking-wider text-[#D5C4AE]">
+                          Relevant Links
+                        </p>
+                        <ul className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] font-semibold text-[#FAF6F0]">
+                          {profile.githubUsername.trim() && (
+                            <li className="min-w-0">
+                              <a
+                                href={
+                                  profile.githubRepo
+                                    ? `https://github.com/${encodeURIComponent(profile.githubUsername)}/${encodeURIComponent(profile.githubRepo)}`
+                                    : safeHttpHref(profile.githubProfileUrl) ||
+                                    `https://github.com/${encodeURIComponent(profile.githubUsername)}`
+                                }
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 py-0.5 text-[#FAF6F0] hover:text-[#D5C4AE] hover:underline max-w-full"
+                              >
+                                <span className="truncate">
+                                  GitHub (@{profile.githubUsername}
+                                  {profile.githubRepo ? `/${profile.githubRepo}` : ''})
+                                </span>
+                                <ExternalLink className="w-3 h-3 opacity-80 shrink-0" />
+                              </a>
+                            </li>
+                          )}
+                          {footerGoogleMapsUrl && (
+                            <li className="min-w-0">
+                              <a
+                                href={footerGoogleMapsUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 py-0.5 text-[#FAF6F0] hover:text-[#D5C4AE] hover:underline max-w-full"
+                              >
+                                <MapPin className="w-3 h-3 opacity-85 shrink-0" />
+                                <span className="truncate">
+                                  Google Maps{profile.location.trim() ? ` (${profile.location.trim()})` : ''}
+                                </span>
+                                <ExternalLink className="w-3 h-3 opacity-80 shrink-0" />
+                              </a>
+                            </li>
+                          )}
+                          {profile.email.trim() && (
+                            <li className="min-w-0">
+                              <a
+                                href={`mailto:${profile.email}`}
+                                className="inline-flex items-center gap-1 py-0.5 text-[#FAF6F0] hover:text-[#D5C4AE] hover:underline max-w-full"
+                              >
+                                <span className="truncate">{profile.email}</span>
+                                <ExternalLink className="w-3 h-3 opacity-80 shrink-0" />
+                              </a>
+                            </li>
+                          )}
+                          {links.slice(0, 2).map((topLink, idx) => (
+                            <li
+                              key={`footer-${topLink.id}`}
+                              className={`min-w-0 ${idx === 1 ? 'col-span-2' : ''}`}
+                            >
+                              <a
+                                href={safeHttpHref(topLink.url) || '#'}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 py-0.5 text-[#FAF6F0]/90 hover:text-[#FAF6F0] hover:underline max-w-full"
+                              >
+                                <span className="truncate">{topLink.title}</span>
+                                <ExternalLink className="w-3 h-3 opacity-80 shrink-0" />
+                              </a>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="pt-2.5 border-t border-[#FAF6F0]/20 flex flex-wrap items-center justify-between gap-2 text-[10px] font-ibm-mono text-[#D5C4AE]">
+                    <span>
+                      © {new Date().getFullYear()}{' '}
+                      {[profile.name.trim() || 'Link Hub', profile.location.trim()]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </span>
+                    <span className="font-semibold text-[#FAF6F0]">
+                      {designSystem.pantoneCode || 'PANTONE 19-1118 TCX'}
+                    </span>
+                  </div>
+                </footer>
+              </>
+            )}
           </main>
 
           {/* END OF WEBSITE BAR: OPTIONAL BUY ME A COFFEE LINK + SCROLL TO TOP */}
           <div
-            className={`mt-5 sm:mt-6 w-full max-w-[540px] flex flex-wrap items-center gap-3 px-1 ${
-              profile.buyMeACoffeeUrl?.trim() ? 'justify-between' : 'justify-end'
-            }`}
+            className={`mt-5 sm:mt-6 w-full max-w-[540px] flex flex-wrap items-center gap-3 px-1 ${profile.buyMeACoffeeUrl?.trim() ? 'justify-between' : 'justify-end'
+              }`}
           >
             {safeHttpHref(profile.buyMeACoffeeUrl) && (
               <a
@@ -1592,18 +1846,22 @@ function AppContent() {
 
       {/* MODALS */}
       {showUpdatesModal && (
-        <GetUpdatesModal
-          profileName={profile.name}
-          onClose={() => setShowUpdatesModal(false)}
-          onSubscribe={handleSubscribe}
-        />
+        <Suspense fallback={null}>
+          <GetUpdatesModal
+            profileName={profile.name}
+            onClose={() => setShowUpdatesModal(false)}
+            onSubscribe={handleSubscribe}
+          />
+        </Suspense>
       )}
 
       {showShareModal && (
-        <ShareModal
-          handle={profile.handle}
-          onClose={() => setShowShareModal(false)}
-        />
+        <Suspense fallback={null}>
+          <ShareModal
+            handle={profile.handle}
+            onClose={() => setShowShareModal(false)}
+          />
+        </Suspense>
       )}
     </div>
   );

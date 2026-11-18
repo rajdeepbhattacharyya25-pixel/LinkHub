@@ -28,6 +28,32 @@ export default defineConfig(() => {
         },
       },
     ],
+    build: {
+      rollupOptions: {
+        input: {
+          main: path.resolve(__dirname, 'index.html'),
+          admin: path.resolve(__dirname, 'admin.html'),
+        },
+        output: {
+          manualChunks(id) {
+            if (id.includes('node_modules/react/') || id.includes('node_modules/react-dom/')) {
+              return 'react-vendor';
+            }
+            if (id.includes('node_modules/firebase/firestore') || id.includes('node_modules/@firebase/firestore')) {
+              return 'firebase-firestore';
+            }
+            if (
+              id.includes('node_modules/firebase/app') ||
+              id.includes('node_modules/@firebase/app') ||
+              id.includes('node_modules/@firebase/util') ||
+              id.includes('node_modules/@firebase/component')
+            ) {
+              return 'firebase-core';
+            }
+          },
+        },
+      },
+    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

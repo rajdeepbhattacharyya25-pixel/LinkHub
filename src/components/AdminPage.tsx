@@ -35,6 +35,8 @@ import {
   DEFAULT_SITE_CONFIG,
   SAVED_DESIGN_SYSTEM,
   DEFAULT_AVATAR_DATA_URI,
+  SOCIAL_PLATFORM_LIST,
+  SOCIAL_PLATFORM_META,
   type SiteConfigState,
   type SocialPlatform,
   type SocialLink,
@@ -48,6 +50,8 @@ import {
   ShieldCheck,
   Loader2,
   RefreshCw,
+  GripVertical,
+  Smartphone,
 } from 'lucide-react';
 import {
   parseGitHubRepoOrUserInput,
@@ -56,6 +60,7 @@ import {
   formatCategorySingularLabel,
   addOrRestoreCategoryEntry,
   deleteCategoryFromEntriesAndLinks,
+  reorderListItems,
   ADMIN_WORKSPACE_GROUPS,
   getWorkspaceGroupForTab,
   computeWorkspaceGroupBadges,
@@ -102,6 +107,10 @@ import { LogOut, Lock } from 'lucide-react';
 import { BiometricSecurityTab } from './BiometricSecurityTab';
 import { ImageCropModal, type CropSessionRequest } from './ImageCropModal';
 import type { AdminPasskeyRecord } from '../utils/biometricAuth';
+import {
+  parseAdminInitialTabFromSearch,
+  useAdminPwaInstall,
+} from '../utils/adminPwa';
 import { AdminGoogleMapPicker, PageoDarkMapSvg } from './GoogleMapView';
 import {
   buildGoogleMapsExternalUrl,
@@ -146,16 +155,7 @@ export interface AdminPageProps {
   onBackToHub: () => void;
 }
 
-const SOCIAL_PLATFORMS: SocialPlatform[] = [
-  'x',
-  'github',
-  'medium',
-  'linkedin',
-  'stackoverflow',
-  'instagram',
-  'spotify',
-  'soundcloud',
-];
+const SOCIAL_PLATFORMS: SocialPlatform[] = SOCIAL_PLATFORM_LIST;
 
 export const AdminPage: React.FC<AdminPageProps> = ({
   config,
@@ -177,13 +177,18 @@ export const AdminPage: React.FC<AdminPageProps> = ({
   onSignOut,
   onBackToHub,
 }) => {
-  const [activeTab, setActiveTab] = useState<AdminTab>('profile');
+  const [activeTab, setActiveTab] = useState<AdminTab>(() => {
+    if (typeof window === 'undefined') return 'profile';
+    return parseAdminInitialTabFromSearch(window.location.search) || 'profile';
+  });
   const [saveNotice, setSaveNotice] = useState<string | null>(null);
   const [cloudSyncError, setCloudSyncError] = useState<string | null>(null);
   const [uploadingSlot, setUploadingSlot] = useState<string | null>(null);
   const [cropSession, setCropSession] = useState<CropSessionRequest | null>(null);
   const [savingToCloud, setSavingToCloud] = useState(false);
   const [showMobileMoreMenu, setShowMobileMoreMenu] = useState(false);
+  const [showPwaInstallHelp, setShowPwaInstallHelp] = useState(false);
+  const adminPwa = useAdminPwaInstall();
   const [showAddLinkForm, setShowAddLinkForm] = useState(() => config.links.length === 0);
   const [expandedLinkIds, setExpandedLinkIds] = useState<Record<string, boolean>>({});
   const [showAddPostForm, setShowAddPostForm] = useState(() => config.posts.length === 0);
@@ -219,10 +224,18 @@ export const AdminPage: React.FC<AdminPageProps> = ({
   knownCloudLinkIdsRef.current = knownCloudLinkIds;
 
   // New Social form state
-  const [newSocialPlatform, setNewSocialPlatform] = useState<SocialPlatform>('x');
+  const [newSocialPlatform, setNewSocialPlatform] = useState<SocialPlatform>('devfolio');
   const [newSocialLabel, setNewSocialLabel] = useState('');
   const [newSocialHandle, setNewSocialHandle] = useState('');
   const [newSocialUrl, setNewSocialUrl] = useState('');
+
+  // Reorder & safe-delete UI states for Portfolio Link Cards and Social Links
+  const [draggingLinkIdx, setDraggingLinkIdx] = useState<number | null>(null);
+  const [dragOverLinkIdx, setDragOverLinkIdx] = useState<number | null>(null);
+  const [confirmDeleteLinkId, setConfirmDeleteLinkId] = useState<string | null>(null);
+  const [draggingSocialIdx, setDraggingSocialIdx] = useState<number | null>(null);
+  const [dragOverSocialIdx, setDragOverSocialIdx] = useState<number | null>(null);
+  const [confirmDeleteSocialId, setConfirmDeleteSocialId] = useState<string | null>(null);
 
   // New Blog Post form state
   const [newPostTitle, setNewPostTitle] = useState('');
@@ -1167,6 +1180,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
 
   const handleDeleteLink = (id: string) => {
     const latest = configRef.current;
+    setConfirmDeleteLinkId(null);
     const target = latest.links.find((item) => item.id === id);
     if (target?.thumbnailPath) {
       deleteMediaFromFirebaseStorage({
@@ -1181,14 +1195,23 @@ export const AdminPage: React.FC<AdminPageProps> = ({
     void persistConfigToCloudNow(nextConfig, 'Removed link card');
   };
 
-  const handleMoveLink = (index: number, direction: -1 | 1) => {
+  const handleReorderLink = (fromIndex: number, toIndex: number) => {
     const latest = configRef.current;
-    const target = index + direction;
-    if (target < 0 || target >= latest.links.length) return;
-    const next = [...latest.links];
-    const [moved] = next.splice(index, 1);
-    next.splice(target, 0, moved);
-    void persistConfigToCloudNow({ ...latest, links: next });
+    if (
+      fromIndex === toIndex ||
+      fromIndex < 0 ||
+      toIndex < 0 ||
+      fromIndex >= latest.links.length ||
+      toIndex >= latest.links.length
+    ) {
+      return;
+    }
+    const next = reorderListItems(latest.links, fromIndex, toIndex);
+    void persistConfigToCloudNow({ ...latest, links: next }, 'Reordered link cards');
+  };
+
+  const handleMoveLink = (index: number, direction: -1 | 1) => {
+    handleReorderLink(index, index + direction);
   };
 
   // Social handlers
@@ -1206,7 +1229,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
     const item: SocialLink = {
       id: `social-${Date.now()}`,
       platform: newSocialPlatform,
-      label: newSocialLabel.trim() || newSocialPlatform.toUpperCase(),
+      label: newSocialLabel.trim() || SOCIAL_PLATFORM_META[newSocialPlatform].label,
       handle: newSocialHandle.trim() || defaultHandle,
       url: cleanUrl,
     };
@@ -1230,6 +1253,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
 
   const handleDeleteSocial = (id: string) => {
     const latest = configRef.current;
+    setConfirmDeleteSocialId(null);
     void persistConfigToCloudNow(
       {
         ...latest,
@@ -1237,6 +1261,25 @@ export const AdminPage: React.FC<AdminPageProps> = ({
       },
       'Removed social icon'
     );
+  };
+
+  const handleReorderSocial = (fromIndex: number, toIndex: number) => {
+    const latest = configRef.current;
+    if (
+      fromIndex === toIndex ||
+      fromIndex < 0 ||
+      toIndex < 0 ||
+      fromIndex >= latest.socials.length ||
+      toIndex >= latest.socials.length
+    ) {
+      return;
+    }
+    const next = reorderListItems(latest.socials, fromIndex, toIndex);
+    void persistConfigToCloudNow({ ...latest, socials: next }, 'Reordered social links');
+  };
+
+  const handleMoveSocial = (index: number, direction: -1 | 1) => {
+    handleReorderSocial(index, index + direction);
   };
 
   // Blog Post handlers
@@ -1498,8 +1541,18 @@ export const AdminPage: React.FC<AdminPageProps> = ({
 
   const workspaceSubTabs = tabs.filter((t) => activeWorkspaceGroup.tabs.includes(t.id));
 
+  const handleInstallAdminApp = async () => {
+    const outcome = await adminPwa.promptInstall();
+    if (outcome === 'accepted') {
+      setShowPwaInstallHelp(false);
+      triggerSavedBanner('Admin Studio app installed on your device');
+    } else if (outcome === 'manual') {
+      setShowPwaInstallHelp((prev) => !prev);
+    }
+  };
+
   return (
-    <div className="relative z-10 min-h-screen pt-2 sm:pt-10 pb-24 sm:pb-14 px-2 sm:px-4 flex flex-col items-center font-manrope">
+    <div className="relative z-10 min-h-screen pt-[max(0.5rem,env(safe-area-inset-top))] sm:pt-10 pb-[max(6rem,env(safe-area-inset-bottom))] sm:pb-14 px-2 sm:px-4 flex flex-col items-center font-manrope">
       <div className="w-full max-w-[960px] rounded-[20px] sm:rounded-[28px] bg-card-paper border border-[#D5C4AE] shadow-[0_24px_60px_-15px_rgba(26,18,14,0.48)] p-3.5 sm:p-7 space-y-4 sm:space-y-6">
         {/* TOP ADMIN STUDIO HEADER */}
         <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3.5 pb-3.5 sm:pb-5 border-b border-[#D5C4AE]">
@@ -1575,6 +1628,24 @@ export const AdminPage: React.FC<AdminPageProps> = ({
           {/* Mobile Quick Actions Drawer (Hidden unless expanded) */}
           {showMobileMoreMenu && (
             <div className="sm:hidden grid grid-cols-2 gap-2 p-2.5 rounded-xl bg-[#FAF6F0] border border-[#B89B7E]">
+              {!adminPwa.isInstalled && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowMobileMoreMenu(false);
+                    void handleInstallAdminApp();
+                  }}
+                  disabled={adminPwa.installing}
+                  className="col-span-2 inline-flex items-center justify-center gap-1.5 min-h-[38px] px-2.5 py-1.5 rounded-lg bg-[#1A120E] text-[#FAF6F0] text-[11.5px] font-bold cursor-pointer disabled:opacity-60"
+                >
+                  <Smartphone className="w-3.5 h-3.5" />
+                  <span>
+                    {adminPwa.canNativePrompt
+                      ? 'Install Admin App'
+                      : 'Add Admin App to Home Screen'}
+                  </span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => {
@@ -1628,6 +1699,18 @@ export const AdminPage: React.FC<AdminPageProps> = ({
 
           {/* Desktop Action Cluster */}
           <div className="hidden sm:flex flex-wrap items-center gap-2 self-start sm:self-center">
+            {!adminPwa.isInstalled && (
+              <button
+                type="button"
+                onClick={() => void handleInstallAdminApp()}
+                disabled={adminPwa.installing}
+                title="Install Link Hub Admin Studio as a standalone Web App"
+                className="inline-flex items-center gap-1.5 min-h-[40px] px-3 py-2 rounded-xl bg-[#3A2418] hover:bg-[#6B4A2E] text-[#FAF6F0] text-xs font-semibold transition-colors cursor-pointer disabled:opacity-60"
+              >
+                <Smartphone className="w-3.5 h-3.5" />
+                <span>{adminPwa.canNativePrompt ? 'Install App' : 'App Shortcut'}</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={handleExportJson}
@@ -1679,6 +1762,34 @@ export const AdminPage: React.FC<AdminPageProps> = ({
             </button>
           </div>
         </header>
+
+        {showPwaInstallHelp && !adminPwa.isInstalled && (
+          <div
+            role="region"
+            aria-label="Install Admin Studio Web App instructions"
+            className="p-3.5 rounded-xl sm:rounded-2xl bg-[#FAF6F0] border border-[#B89B7E] flex items-start justify-between gap-3 text-xs text-[#1A120E]"
+          >
+            <div className="space-y-1">
+              <p className="font-bold flex items-center gap-1.5">
+                <Smartphone className="w-3.5 h-3.5 text-[#6B4A2E]" />
+                <span>Install Link Hub Admin Studio on Mobile</span>
+              </p>
+              <p className="text-[11.5px] text-[#3A2418] leading-relaxed">
+                {adminPwa.isIosSafari
+                  ? 'Tap the Share button in Safari, then choose "Add to Home Screen" to launch Admin Studio full-screen with Face ID / Touch ID.'
+                  : 'In Chrome on Android, tap the ⋮ menu in the top-right corner and choose "Install app" or "Add to Home screen" to create a standalone Admin Studio shortcut.'}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowPwaInstallHelp(false)}
+              aria-label="Dismiss install instructions"
+              className="min-h-[30px] min-w-[30px] inline-flex items-center justify-center rounded-lg bg-[#F4EDE2] border border-[#D5C4AE] text-[#3A2418] cursor-pointer shrink-0"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
 
         {/* WORKSPACE GROUPS NAVIGATION (Desktop 4-column switcher; mobile uses fixed bottom thumb dock) */}
         <nav aria-label="Studio Workspaces" className="hidden sm:grid sm:grid-cols-4 gap-2">
@@ -3025,49 +3136,116 @@ export const AdminPage: React.FC<AdminPageProps> = ({
               )}
               {config.links.map((item, idx) => {
                 const isExpanded = Boolean(expandedLinkIds[item.id]);
+                const isDragging = draggingLinkIdx === idx;
+                const isDragTarget =
+                  dragOverLinkIdx === idx && draggingLinkIdx !== null && draggingLinkIdx !== idx;
+                const isConfirmingDelete = confirmDeleteLinkId === item.id;
                 return (
                   <div
                     key={item.id}
-                    className="rounded-xl sm:rounded-2xl bg-[#FAF6F0] border border-[#B89B7E] overflow-hidden"
+                    draggable={!isExpanded}
+                    onDragStart={(e) => {
+                      setDraggingLinkIdx(idx);
+                      e.dataTransfer.effectAllowed = 'move';
+                      e.dataTransfer.setData('text/plain', String(idx));
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = 'move';
+                      if (dragOverLinkIdx !== idx) setDragOverLinkIdx(idx);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      if (draggingLinkIdx !== null && draggingLinkIdx !== idx) {
+                        handleReorderLink(draggingLinkIdx, idx);
+                      }
+                      setDraggingLinkIdx(null);
+                      setDragOverLinkIdx(null);
+                    }}
+                    onDragEnd={() => {
+                      setDraggingLinkIdx(null);
+                      setDragOverLinkIdx(null);
+                    }}
+                    className={`rounded-xl sm:rounded-2xl bg-[#FAF6F0] border overflow-hidden transition-all ${
+                      isDragTarget
+                        ? 'border-[#3A2418] ring-2 ring-[#6B4A2E]/40'
+                        : 'border-[#B89B7E]'
+                    } ${isDragging ? 'opacity-60' : ''}`}
                   >
                     {/* Compact Accordion Summary Row */}
-                    <div className="p-2.5 sm:p-3.5 flex items-center justify-between gap-2">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setExpandedLinkIds((prev) => ({
-                            ...prev,
-                            [item.id]: !prev[item.id],
-                          }))
-                        }
-                        aria-expanded={isExpanded}
-                        className="flex-1 min-w-0 flex items-center gap-2 text-left cursor-pointer py-0.5"
-                      >
-                        <span className="px-1.5 py-0.5 rounded-md bg-[#F4EDE2] border border-[#B89B7E] font-ibm-mono text-[10px] font-bold text-[#3A2418] shrink-0">
-                          #{idx + 1}
+                    <div className="p-2.5 sm:p-3.5 flex flex-wrap sm:flex-nowrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5 sm:gap-2 flex-1 min-w-0">
+                        <span
+                          title={
+                            isExpanded
+                              ? 'Collapse card to drag-reorder, or use Up/Down arrows'
+                              : 'Drag to reorder link'
+                          }
+                          aria-hidden="true"
+                          className={`inline-flex items-center justify-center w-6 h-8 rounded-md text-[#6B4A2E] shrink-0 ${
+                            isExpanded ? 'opacity-40 cursor-default' : 'cursor-grab active:cursor-grabbing hover:bg-[#F4EDE2]'
+                          }`}
+                        >
+                          <GripVertical className="w-3.5 h-3.5" />
                         </span>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-1 min-w-0">
-                            <span className="text-[12.5px] sm:text-sm font-bold text-[#1A120E] truncate">
-                              {item.title}
-                            </span>
-                            {item.pinned && (
-                              <Pin className="w-3 h-3 text-[#6B4A2E] shrink-0" />
-                            )}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedLinkIds((prev) => ({
+                              ...prev,
+                              [item.id]: !prev[item.id],
+                            }))
+                          }
+                          aria-expanded={isExpanded}
+                          className="flex-1 min-w-0 flex items-center gap-2 text-left cursor-pointer py-0.5"
+                        >
+                          <span className="px-1.5 py-0.5 rounded-md bg-[#F4EDE2] border border-[#B89B7E] font-ibm-mono text-[10px] font-bold text-[#3A2418] shrink-0">
+                            #{idx + 1}
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1 min-w-0">
+                              <span className="text-[12.5px] sm:text-sm font-bold text-[#1A120E] truncate">
+                                {item.title}
+                              </span>
+                              {item.pinned && (
+                                <Pin className="w-3 h-3 text-[#6B4A2E] shrink-0" />
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1.5 font-ibm-mono text-[10px] text-[#5C3D24] truncate">
+                              <span>{formatCategorySingularLabel(item.category)}</span>
+                              <span>·</span>
+                              <span>{item.clicks} clicks</span>
+                            </div>
                           </div>
-                          <div className="flex items-center gap-1.5 font-ibm-mono text-[10px] text-[#5C3D24] truncate">
-                            <span>{formatCategorySingularLabel(item.category)}</span>
-                            <span>·</span>
-                            <span>{item.clicks} clicks</span>
-                          </div>
-                        </div>
-                      </button>
+                        </button>
+                      </div>
 
-                      <div className="flex items-center gap-1 shrink-0">
+                      <div className="flex items-center gap-1 shrink-0 w-full sm:w-auto justify-end">
+                        <button
+                          type="button"
+                          onClick={() => handleMoveLink(idx, -1)}
+                          disabled={idx === 0}
+                          aria-label={`Move ${item.title} up`}
+                          title="Move up"
+                          className="min-h-[34px] min-w-[32px] inline-flex items-center justify-center rounded-lg bg-[#F4EDE2] hover:bg-[#EAE0D3] border border-[#B89B7E] text-[#1A120E] disabled:opacity-35 cursor-pointer"
+                        >
+                          <ArrowUp className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleMoveLink(idx, 1)}
+                          disabled={idx === config.links.length - 1}
+                          aria-label={`Move ${item.title} down`}
+                          title="Move down"
+                          className="min-h-[34px] min-w-[32px] inline-flex items-center justify-center rounded-lg bg-[#F4EDE2] hover:bg-[#EAE0D3] border border-[#B89B7E] text-[#1A120E] disabled:opacity-35 cursor-pointer"
+                        >
+                          <ArrowDown className="w-3.5 h-3.5" />
+                        </button>
                         <button
                           type="button"
                           onClick={() => handleUpdateLink(item.id, { pinned: !item.pinned })}
                           aria-label={item.pinned ? `Unpin ${item.title}` : `Pin ${item.title}`}
+                          title={item.pinned ? 'Unpin' : 'Pin to top'}
                           className={`inline-flex items-center justify-center min-h-[34px] min-w-[34px] px-2 rounded-lg text-[11px] font-semibold cursor-pointer ${
                             item.pinned
                               ? 'bg-[#3A2418] text-[#FAF6F0]'
@@ -3094,6 +3272,36 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                             <ChevronDown className="w-3.5 h-3.5" />
                           )}
                         </button>
+                        {isConfirmingDelete ? (
+                          <div className="inline-flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteLink(item.id)}
+                              aria-label={`Confirm delete ${item.title}`}
+                              className="min-h-[34px] px-2.5 rounded-lg bg-[#9A2E2E] hover:bg-[#7A2020] text-[#FAF6F0] text-[11px] font-bold cursor-pointer"
+                            >
+                              Delete
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteLinkId(null)}
+                              aria-label="Cancel delete"
+                              className="min-h-[34px] px-2 rounded-lg bg-[#F4EDE2] border border-[#B89B7E] text-[11px] font-semibold text-[#3A2418] cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteLinkId(item.id)}
+                            aria-label={`Delete ${item.title}`}
+                            title="Delete link"
+                            className="min-h-[34px] min-w-[34px] inline-flex items-center justify-center rounded-lg bg-[#F4EDE2] hover:bg-[#3A2418] hover:text-[#FAF6F0] border border-[#B89B7E] text-[#3A2418] transition-colors cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
                     </div>
 
@@ -3593,7 +3801,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                 >
                   {SOCIAL_PLATFORMS.map((p) => (
                     <option key={p} value={p}>
-                      {p.toUpperCase()}
+                      {SOCIAL_PLATFORM_META[p].optionLabel}
                     </option>
                   ))}
                 </select>
@@ -3601,7 +3809,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                   type="text"
                   value={newSocialLabel}
                   onChange={(e) => setNewSocialLabel(e.target.value)}
-                  placeholder="Label (e.g. GitHub)"
+                  placeholder={`Label (e.g. ${SOCIAL_PLATFORM_META[newSocialPlatform].label})`}
                   aria-label="Social label"
                   className="min-h-[36px] px-2.5 py-1.5 rounded-lg sm:rounded-xl bg-[#F4EDE2] border border-[#B89B7E] text-[12px] sm:text-xs text-[#1A120E]"
                 />
@@ -3609,7 +3817,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                   type="text"
                   value={newSocialHandle}
                   onChange={(e) => setNewSocialHandle(e.target.value)}
-                  placeholder="Handle (e.g. @username)"
+                  placeholder={`Handle (${SOCIAL_PLATFORM_META[newSocialPlatform].handlePlaceholder})`}
                   aria-label="Social handle"
                   className="col-span-2 sm:col-span-1 min-h-[36px] px-2.5 py-1.5 rounded-lg sm:rounded-xl bg-[#F4EDE2] border border-[#B89B7E] font-ibm-mono text-[12px] sm:text-xs text-[#1A120E]"
                 />
@@ -3617,7 +3825,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                   type="text"
                   value={newSocialUrl}
                   onChange={(e) => setNewSocialUrl(e.target.value)}
-                  placeholder="https://..."
+                  placeholder={SOCIAL_PLATFORM_META[newSocialPlatform].urlPlaceholder}
                   aria-label="Social URL"
                   className="col-span-2 sm:col-span-1 min-h-[36px] px-2.5 py-1.5 rounded-lg sm:rounded-xl bg-[#F4EDE2] border border-[#B89B7E] font-ibm-mono text-[12px] sm:text-xs text-[#1A120E]"
                 />
@@ -3637,48 +3845,177 @@ export const AdminPage: React.FC<AdminPageProps> = ({
               </div>
             ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 sm:gap-3">
-              {config.socials.map((soc) => (
-                <div
-                  key={soc.id}
-                  className="p-3 rounded-xl sm:rounded-2xl bg-[#FAF6F0] border border-[#B89B7E] space-y-2"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="w-6 h-6 sm:w-7 sm:h-7 rounded-full bg-[#3A2418] text-[#FAF6F0] flex items-center justify-center shrink-0">
-                        <BrandIcon platform={soc.platform} className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
-                      </span>
-                      <span className="text-[12.5px] sm:text-xs font-bold text-[#1A120E] truncate">{soc.label}</span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteSocial(soc.id)}
-                      aria-label={`Remove ${soc.label}`}
-                      className="min-h-[30px] min-w-[30px] flex items-center justify-center rounded-lg bg-[#F4EDE2] hover:bg-[#3A2418] hover:text-[#FAF6F0] text-[#3A2418] border border-[#D5C4AE] transition-colors cursor-pointer shrink-0"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <input
-                      type="text"
-                      value={soc.handle}
-                      onChange={(e) =>
-                        handleUpdateSocial(soc.id, { handle: e.target.value })
+              {config.socials.map((soc, idx) => {
+                const isDragging = draggingSocialIdx === idx;
+                const isDragTarget =
+                  dragOverSocialIdx === idx &&
+                  draggingSocialIdx !== null &&
+                  draggingSocialIdx !== idx;
+                const isConfirmingDelete = confirmDeleteSocialId === soc.id;
+                const meta = SOCIAL_PLATFORM_META[soc.platform] || SOCIAL_PLATFORM_META.website;
+                return (
+                  <div
+                    key={soc.id}
+                    draggable
+                    onDragStart={(e) => {
+                      setDraggingSocialIdx(idx);
+                      e.dataTransfer.effectAllowed = 'move';
+                      e.dataTransfer.setData('text/plain', String(idx));
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = 'move';
+                      if (dragOverSocialIdx !== idx) setDragOverSocialIdx(idx);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      if (draggingSocialIdx !== null && draggingSocialIdx !== idx) {
+                        handleReorderSocial(draggingSocialIdx, idx);
                       }
-                      aria-label={`${soc.label} handle`}
-                      className="min-h-[34px] px-2.5 py-1 rounded-lg bg-[#F4EDE2] border border-[#B89B7E] font-ibm-mono text-[11.5px] sm:text-[11px] text-[#1A120E]"
-                    />
-                    <input
-                      type="text"
-                      value={soc.url}
-                      onChange={(e) => handleUpdateSocial(soc.id, { url: e.target.value })}
-                      aria-label={`${soc.label} URL`}
-                      className="min-h-[34px] px-2.5 py-1 rounded-lg bg-[#F4EDE2] border border-[#B89B7E] font-ibm-mono text-[11.5px] sm:text-[11px] text-[#1A120E]"
-                    />
+                      setDraggingSocialIdx(null);
+                      setDragOverSocialIdx(null);
+                    }}
+                    onDragEnd={() => {
+                      setDraggingSocialIdx(null);
+                      setDragOverSocialIdx(null);
+                    }}
+                    className={`p-3 rounded-xl sm:rounded-2xl bg-[#FAF6F0] border space-y-2.5 transition-all ${
+                      isDragTarget
+                        ? 'border-[#3A2418] ring-2 ring-[#6B4A2E]/40'
+                        : 'border-[#B89B7E]'
+                    } ${isDragging ? 'opacity-60' : ''}`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
+                        <span
+                          title="Drag to reorder social link"
+                          aria-hidden="true"
+                          className="inline-flex items-center justify-center w-5 h-7 rounded text-[#6B4A2E] cursor-grab active:cursor-grabbing hover:bg-[#F4EDE2] shrink-0"
+                        >
+                          <GripVertical className="w-3.5 h-3.5" />
+                        </span>
+                        <span className="px-1.5 py-0.5 rounded-md bg-[#F4EDE2] border border-[#D5C4AE] font-ibm-mono text-[10px] font-bold text-[#3A2418] shrink-0">
+                          #{idx + 1}
+                        </span>
+                        <span className="w-6 h-6 sm:w-7 sm:h-7 rounded-full bg-[#3A2418] text-[#FAF6F0] flex items-center justify-center shrink-0">
+                          <BrandIcon platform={soc.platform} className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+                        </span>
+                        <span className="text-[12.5px] sm:text-xs font-bold text-[#1A120E] truncate">
+                          {soc.label}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleMoveSocial(idx, -1)}
+                          disabled={idx === 0}
+                          aria-label={`Move ${soc.label} up`}
+                          title="Move up"
+                          className="min-h-[30px] min-w-[30px] flex items-center justify-center rounded-lg bg-[#F4EDE2] hover:bg-[#EAE0D3] text-[#1A120E] border border-[#D5C4AE] disabled:opacity-35 cursor-pointer"
+                        >
+                          <ArrowUp className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleMoveSocial(idx, 1)}
+                          disabled={idx === config.socials.length - 1}
+                          aria-label={`Move ${soc.label} down`}
+                          title="Move down"
+                          className="min-h-[30px] min-w-[30px] flex items-center justify-center rounded-lg bg-[#F4EDE2] hover:bg-[#EAE0D3] text-[#1A120E] border border-[#D5C4AE] disabled:opacity-35 cursor-pointer"
+                        >
+                          <ArrowDown className="w-3.5 h-3.5" />
+                        </button>
+                        {isConfirmingDelete ? (
+                          <div className="inline-flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteSocial(soc.id)}
+                              aria-label={`Confirm remove ${soc.label}`}
+                              className="min-h-[30px] px-2 rounded-lg bg-[#9A2E2E] hover:bg-[#7A2020] text-[#FAF6F0] text-[10.5px] font-bold cursor-pointer"
+                            >
+                              Remove
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteSocialId(null)}
+                              aria-label="Cancel remove"
+                              className="min-h-[30px] px-1.5 rounded-lg bg-[#F4EDE2] border border-[#D5C4AE] text-[10.5px] font-semibold text-[#3A2418] cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteSocialId(soc.id)}
+                            aria-label={`Remove ${soc.label}`}
+                            title="Delete social link"
+                            className="min-h-[30px] min-w-[30px] flex items-center justify-center rounded-lg bg-[#F4EDE2] hover:bg-[#3A2418] hover:text-[#FAF6F0] text-[#3A2418] border border-[#D5C4AE] transition-colors cursor-pointer shrink-0"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <select
+                        value={soc.platform}
+                        onChange={(e) => {
+                          const nextPlatform = e.target.value as SocialPlatform;
+                          const prevDefault = SOCIAL_PLATFORM_META[soc.platform]?.label;
+                          const shouldUpdateLabel =
+                            !soc.label.trim() ||
+                            soc.label.trim().toLowerCase() === soc.platform.toLowerCase() ||
+                            soc.label === prevDefault;
+                          handleUpdateSocial(soc.id, {
+                            platform: nextPlatform,
+                            ...(shouldUpdateLabel
+                              ? { label: SOCIAL_PLATFORM_META[nextPlatform].label }
+                              : {}),
+                          });
+                        }}
+                        aria-label={`${soc.label} platform`}
+                        className="min-h-[34px] px-2.5 py-1 rounded-lg bg-[#F4EDE2] border border-[#B89B7E] text-[11.5px] sm:text-[11px] font-semibold text-[#1A120E]"
+                      >
+                        {SOCIAL_PLATFORMS.map((p) => (
+                          <option key={p} value={p}>
+                            {SOCIAL_PLATFORM_META[p].optionLabel}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="text"
+                        value={soc.label}
+                        onChange={(e) =>
+                          handleUpdateSocial(soc.id, { label: e.target.value })
+                        }
+                        placeholder={meta.label}
+                        aria-label={`${soc.label} display label`}
+                        className="min-h-[34px] px-2.5 py-1 rounded-lg bg-[#F4EDE2] border border-[#B89B7E] text-[11.5px] sm:text-[11px] font-semibold text-[#1A120E]"
+                      />
+                      <input
+                        type="text"
+                        value={soc.handle}
+                        onChange={(e) =>
+                          handleUpdateSocial(soc.id, { handle: e.target.value })
+                        }
+                        placeholder={meta.handlePlaceholder}
+                        aria-label={`${soc.label} handle`}
+                        className="min-h-[34px] px-2.5 py-1 rounded-lg bg-[#F4EDE2] border border-[#B89B7E] font-ibm-mono text-[11.5px] sm:text-[11px] text-[#1A120E]"
+                      />
+                      <input
+                        type="text"
+                        value={soc.url}
+                        onChange={(e) => handleUpdateSocial(soc.id, { url: e.target.value })}
+                        placeholder={meta.urlPlaceholder}
+                        aria-label={`${soc.label} URL`}
+                        className="min-h-[34px] px-2.5 py-1 rounded-lg bg-[#F4EDE2] border border-[#B89B7E] font-ibm-mono text-[11.5px] sm:text-[11px] text-[#1A120E]"
+                      />
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
             )}
           </section>

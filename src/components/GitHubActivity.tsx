@@ -64,7 +64,7 @@ const CALENDAR_TOOLTIPS = {
 const WEEKDAY_LABELS: Array<'mon' | 'wed' | 'fri'> = ['mon', 'wed', 'fri'];
 const DEFAULT_YEAR_OPTIONS: Year[] = ['last', 2026, 2025];
 
-export const GitHubActivity: React.FC<GitHubActivityProps> = ({
+export const GitHubActivity: React.FC<GitHubActivityProps> = React.memo(({
   username = '',
   repo = '',
   profileUrl,
@@ -633,5 +633,5 @@ export const GitHubActivity: React.FC<GitHubActivityProps> = ({
       </div>
     </section>
   );
-};
+});
 

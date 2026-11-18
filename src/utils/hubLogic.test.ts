@@ -645,6 +645,7 @@ import {
   addOrRestoreCategoryEntry,
   deleteCategoryFromEntriesAndLinks,
   sanitizeCategoryEntry,
+  reorderListItems,
   type AdminTabId,
 } from './hubLogic';
 
@@ -775,4 +776,73 @@ test('isOwnedFirebaseMediaPath strictly matches solo owner Storage cleanup paths
     false
   );
   assert.equal(isOwnedFirebaseMediaPath('', 'ownerUid123'), false);
+});
+
+import {
+  SOCIAL_PLATFORM_LIST,
+  SOCIAL_PLATFORM_META,
+  isSocialPlatform,
+  normalizeSocialPlatform,
+  normalizeSiteConfig,
+} from '../data/profileData';
+
+test('expanded social platforms include Devfolio, Threads, Discord, Telegram, and normalize safely', () => {
+  const required = [
+    'devfolio',
+    'instagram',
+    'threads',
+    'discord',
+    'telegram',
+    'youtube',
+    'kaggle',
+    'unstop',
+    'website',
+  ] as const;
+
+  for (const platform of required) {
+    assert.ok(SOCIAL_PLATFORM_LIST.includes(platform), `missing platform ${platform}`);
+    assert.equal(isSocialPlatform(platform), true);
+    assert.ok(SOCIAL_PLATFORM_META[platform].label.length > 0);
+    assert.ok(SOCIAL_PLATFORM_META[platform].urlPlaceholder.startsWith('https://'));
+  }
+
+  assert.equal(isSocialPlatform('unknown-network'), false);
+  assert.equal(normalizeSocialPlatform('devfolio'), 'devfolio');
+  assert.equal(normalizeSocialPlatform('unknown-network'), 'website');
+
+  const normalized = normalizeSiteConfig({
+    socials: [
+      {
+        id: 's-devfolio',
+        platform: 'devfolio',
+        label: 'Devfolio',
+        handle: '@rajdeep',
+        url: 'https://devfolio.co/@rajdeep',
+      },
+      {
+        id: 's-legacy',
+        platform: 'legacy-unknown' as never,
+        label: 'Custom',
+        handle: 'site',
+        url: 'https://example.com',
+      },
+    ],
+  });
+
+  assert.equal(normalized.socials[0].platform, 'devfolio');
+  assert.equal(normalized.socials[1].platform, 'website');
+});
+
+test('reorderListItems moves items immutably and guards out-of-bounds indices', () => {
+  const original = ['devfolio', 'github', 'threads', 'discord'];
+  const movedDown = reorderListItems(original, 0, 2);
+  assert.deepEqual(movedDown, ['github', 'threads', 'devfolio', 'discord']);
+  assert.deepEqual(original, ['devfolio', 'github', 'threads', 'discord']);
+
+  const movedUp = reorderListItems(movedDown, 3, 1);
+  assert.deepEqual(movedUp, ['github', 'discord', 'threads', 'devfolio']);
+
+  assert.deepEqual(reorderListItems(original, 1, 1), original);
+  assert.deepEqual(reorderListItems(original, -1, 2), original);
+  assert.deepEqual(reorderListItems(original, 0, 99), original);
 });

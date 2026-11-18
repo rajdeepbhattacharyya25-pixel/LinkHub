@@ -1,13 +1,8 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, type User } from 'firebase/auth';
+import type { Auth, GoogleAuthProvider, User } from 'firebase/auth';
 import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
-import { getStorage } from 'firebase/storage';
-import {
-  getAnalytics,
-  isSupported as isAnalyticsSupported,
-  logEvent,
-  type Analytics,
-} from 'firebase/analytics';
+import type { FirebaseStorage } from 'firebase/storage';
+import type { Analytics } from 'firebase/analytics';
 import firebaseConfigFile from '../../firebase-applet-config.json';
 
 const clientEnv: Record<string, string | undefined> =
@@ -37,16 +32,53 @@ const app = initializeApp(resolvedFirebaseConfig);
 
 // CRITICAL: Pass explicit provisioned firestoreDatabaseId so Firestore connects to the named database
 export const db = getFirestore(app, resolvedFirebaseConfig.firestoreDatabaseId);
-export const auth = getAuth(app);
-export const storage = getStorage(app);
-// Fail fast instead of stalling the crop/upload modal for the 10-minute SDK default
-storage.maxUploadRetryTime = 5000;
-storage.maxOperationRetryTime = 5000;
 
-export const googleProvider = new GoogleAuthProvider();
-googleProvider.setCustomParameters({ prompt: 'select_account' });
+let cachedAuthBundle: {
+  auth: Auth;
+  googleProvider: GoogleAuthProvider;
+  authModule: typeof import('firebase/auth');
+} | null = null;
+
+export async function getFirebaseAuthBundle() {
+  if (cachedAuthBundle) return cachedAuthBundle;
+  const authModule = await import('firebase/auth');
+  const authInstance = authModule.getAuth(app);
+  if (typeof window !== 'undefined') {
+    authModule
+      .setPersistence(authInstance, authModule.browserLocalPersistence)
+      .catch(() => {});
+  }
+  const provider = new authModule.GoogleAuthProvider();
+  provider.setCustomParameters({ prompt: 'select_account' });
+  cachedAuthBundle = {
+    auth: authInstance,
+    googleProvider: provider,
+    authModule,
+  };
+  return cachedAuthBundle;
+}
+
+let cachedStorageBundle: {
+  storage: FirebaseStorage;
+  storageModule: typeof import('firebase/storage');
+} | null = null;
+
+export async function getFirebaseStorageBundle() {
+  if (cachedStorageBundle) return cachedStorageBundle;
+  const storageModule = await import('firebase/storage');
+  const storageInstance = storageModule.getStorage(app);
+  // Fail fast instead of stalling the crop/upload modal for the 10-minute SDK default
+  storageInstance.maxUploadRetryTime = 5000;
+  storageInstance.maxOperationRetryTime = 5000;
+  cachedStorageBundle = {
+    storage: storageInstance,
+    storageModule,
+  };
+  return cachedStorageBundle;
+}
 
 let analyticsInstance: Analytics | null = null;
+let analyticsLogEventFn: ((analytics: Analytics, eventName: string, params?: Record<string, unknown>) => void) | null = null;
 let analyticsInitStarted = false;
 
 export async function initFirebaseAnalytics(): Promise<Analytics | null> {
@@ -59,9 +91,11 @@ export async function initFirebaseAnalytics(): Promise<Analytics | null> {
   }
 
   try {
-    const supported = await isAnalyticsSupported();
+    const analyticsMod = await import('firebase/analytics');
+    const supported = await analyticsMod.isSupported();
     if (!supported) return null;
-    analyticsInstance = getAnalytics(app);
+    analyticsInstance = analyticsMod.getAnalytics(app);
+    analyticsLogEventFn = analyticsMod.logEvent;
     return analyticsInstance;
   } catch {
     return null;
@@ -74,8 +108,8 @@ export async function trackGa4Event(
 ): Promise<void> {
   try {
     const analytics = await initFirebaseAnalytics();
-    if (!analytics) return;
-    logEvent(analytics, eventName, params);
+    if (!analytics || !analyticsLogEventFn) return;
+    analyticsLogEventFn(analytics, eventName, params);
   } catch {
     // Non-fatal in ad-blocked or unsupported environments
   }
@@ -112,16 +146,17 @@ export function handleFirestoreError(
   operationType: OperationType,
   path: string | null
 ): never {
+  const currentAuthUser = cachedAuthBundle?.auth.currentUser;
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
+      userId: currentAuthUser?.uid,
+      email: currentAuthUser?.email,
+      emailVerified: currentAuthUser?.emailVerified,
+      isAnonymous: currentAuthUser?.isAnonymous,
+      tenantId: currentAuthUser?.tenantId,
       providerInfo:
-        auth.currentUser?.providerData?.map((provider) => ({
+        currentAuthUser?.providerData?.map((provider) => ({
           providerId: provider.providerId,
           email: provider.email,
         })) || [],

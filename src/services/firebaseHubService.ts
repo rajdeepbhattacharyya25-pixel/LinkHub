@@ -15,19 +15,12 @@ import {
   type Timestamp,
   type Unsubscribe,
 } from 'firebase/firestore';
-import { signInWithPopup, signOut, type User } from 'firebase/auth';
+import type { User } from 'firebase/auth';
+import type { StorageReference } from 'firebase/storage';
 import {
-  deleteObject,
-  getDownloadURL,
-  ref as storageRef,
-  uploadBytesResumable,
-  type StorageReference,
-} from 'firebase/storage';
-import {
-  auth,
   db,
-  googleProvider,
-  storage,
+  getFirebaseAuthBundle,
+  getFirebaseStorageBundle,
   OWNER_ADMIN_EMAIL,
   OperationType,
   evaluateAdminAccessGuard,
@@ -230,13 +223,56 @@ function getTimestampMs(ts: unknown): number {
  * 1. GOOGLE AUTHENTICATION & SOLO-OWNER UID LOCK
  * ========================================================================== */
 
-export async function signInOwnerWithGoogle(): Promise<User> {
-  const result = await signInWithPopup(auth, googleProvider);
-  return result.user;
+function isStandalonePwaDisplayMode(): boolean {
+  if (typeof window === 'undefined') return false;
+  const standaloneMedia =
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(display-mode: standalone)').matches;
+  const iosStandalone = Boolean(
+    (window.navigator as { standalone?: boolean }).standalone
+  );
+  return standaloneMedia || iosStandalone;
+}
+
+export async function signInOwnerWithGoogle(): Promise<User | null> {
+  const { auth, googleProvider, authModule } = await getFirebaseAuthBundle();
+  if (isStandalonePwaDisplayMode()) {
+    await authModule.signInWithRedirect(auth, googleProvider);
+    return null;
+  }
+
+  try {
+    const result = await authModule.signInWithPopup(auth, googleProvider);
+    return result.user;
+  } catch (err) {
+    const code =
+      err && typeof err === 'object' && 'code' in err
+        ? String((err as { code?: unknown }).code || '')
+        : '';
+    if (
+      code === 'auth/popup-blocked' ||
+      code === 'auth/operation-not-supported-in-this-environment'
+    ) {
+      await authModule.signInWithRedirect(auth, googleProvider);
+      return null;
+    }
+    throw err;
+  }
+}
+
+export async function completePendingGoogleRedirect(): Promise<User | null> {
+  try {
+    const { auth, authModule } = await getFirebaseAuthBundle();
+    const result = await authModule.getRedirectResult(auth);
+    return result?.user ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export async function signOutOwner(): Promise<void> {
-  await signOut(auth);
+  const { auth, authModule } = await getFirebaseAuthBundle();
+  await authModule.signOut(auth);
 }
 
 /**
@@ -624,7 +660,7 @@ export async function persistFullHubToFirestore(params: {
 
   // Serialize writes so rapid add-link + auto-preview updates never race on the same doc
   const queued = persistQueue.then(executePersist, executePersist);
-  persistQueue = queued.catch(() => {});
+  persistQueue = queued.catch(() => { });
   return queued;
 }
 
@@ -670,9 +706,10 @@ async function uploadBlobResumableWithTimeout(params: {
   } = params;
 
   throwIfAborted(signal);
+  const { storageModule } = await getFirebaseStorageBundle();
 
   await new Promise<void>((resolve, reject) => {
-    const task = uploadBytesResumable(fileRef, blob, { contentType });
+    const task = storageModule.uploadBytesResumable(fileRef, blob, { contentType });
     let settled = false;
 
     const cleanup = () => {
@@ -737,7 +774,7 @@ async function uploadBlobResumableWithTimeout(params: {
   throwIfAborted(signal);
 
   const downloadUrl = await Promise.race([
-    getDownloadURL(fileRef),
+    storageModule.getDownloadURL(fileRef),
     new Promise<never>((_, reject) =>
       setTimeout(() => reject(new Error('Timed out resolving storage download URL.')), 4500)
     ),
@@ -765,7 +802,8 @@ export async function deleteMediaFromFirebaseStorage(params: {
   let deletedStorage = false;
   if (isFirebaseObj) {
     try {
-      await deleteObject(storageRef(storage, cleanPath));
+      const { storage, storageModule } = await getFirebaseStorageBundle();
+      await storageModule.deleteObject(storageModule.ref(storage, cleanPath));
       deletedStorage = true;
     } catch (err) {
       const code =
@@ -866,7 +904,8 @@ export async function uploadCompressedMediaToFirebaseStorage(params: {
   if (shouldTryFirebaseStorage) {
     try {
       onProgress?.(16, 'Uploading...');
-      const fileRef = storageRef(storage, objectPath);
+      const { storage, storageModule } = await getFirebaseStorageBundle();
+      const fileRef = storageModule.ref(storage, objectPath);
       finalPublicUrl = await uploadBlobResumableWithTimeout({
         fileRef,
         blob,
@@ -1013,7 +1052,7 @@ export async function submitVisitorMessageToFirestore(
     handleFirestoreError(err, OperationType.CREATE, `messages/${messageId}`);
   }
 
-  trackGa4Event('contact_submit', { source: msg.source }).catch(() => {});
+  trackGa4Event('contact_submit', { source: msg.source }).catch(() => { });
   return messageId;
 }
 
@@ -1035,7 +1074,7 @@ export async function submitSubscriberToFirestore(
     handleFirestoreError(err, OperationType.CREATE, `subscribers/${subscriberId}`);
   }
 
-  trackGa4Event('newsletter_subscribe', { channel: 'modal' }).catch(() => {});
+  trackGa4Event('newsletter_subscribe', { channel: 'modal' }).catch(() => { });
   return subscriberId;
 }
 
@@ -1051,7 +1090,7 @@ export async function trackPublicLinkClick(params: {
     content_type: link.category,
     item_id: link.id,
     item_name: link.title,
-  }).catch(() => {});
+  }).catch(() => { });
 
   // 2. Structured Firestore Telemetry Stream (only write relational click when doc exists in Firestore)
   if (!cloudLinkExists) return;
@@ -1083,7 +1122,7 @@ export async function trackPublicProfileView(params: {
   trackGa4Event('page_view', {
     page_location: typeof window !== 'undefined' ? window.location.href : '',
     source,
-  }).catch(() => {});
+  }).catch(() => { });
 
   const eventId = sanitizeFirestoreId(
     `view-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -1238,9 +1277,9 @@ export function subscribeAdminPasskeys(
           deviceLabel: String(d.deviceLabel || 'Trusted Device'),
           platform:
             d.platform === 'android' ||
-            d.platform === 'ios' ||
-            d.platform === 'windows' ||
-            d.platform === 'macos'
+              d.platform === 'ios' ||
+              d.platform === 'windows' ||
+              d.platform === 'macos'
               ? d.platform
               : 'other',
           publicKeySpki: String(d.publicKeySpki || ''),

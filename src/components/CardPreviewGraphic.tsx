@@ -3,7 +3,7 @@ import {
   resolveCardPreviewDisplay,
   type LinkPreviewType,
 } from '../utils/linkPreview';
-import { ensureClientMediaHydrated } from '../services/firebaseHubService';
+import { ensurePublicMediaHydratedRest } from '../services/publicHubRestService';
 
 export interface CardPreviewGraphicProps {
   type: LinkPreviewType;
@@ -39,7 +39,7 @@ export const CardPreviewGraphic: React.FC<CardPreviewGraphicProps> = ({
     const rawImg = resolved.mode === 'image' ? (resolved.imageUrl || '').trim() : '';
     if (rawImg.startsWith('/api/media/')) {
       let cancelled = false;
-      ensureClientMediaHydrated(rawImg)
+      ensurePublicMediaHydratedRest(rawImg)
         .then((hydrated) => {
           if (!cancelled && hydrated && hydrated !== rawImg) {
             setFallbackSrc(hydrated);
@@ -59,7 +59,7 @@ export const CardPreviewGraphic: React.FC<CardPreviewGraphicProps> = ({
     const handleImageError = () => {
       const raw = (resolved.imageUrl || '').trim();
       if (raw.startsWith('/api/media/') && !fallbackSrc) {
-        ensureClientMediaHydrated(raw)
+        ensurePublicMediaHydratedRest(raw)
           .then((hydrated) => {
             if (hydrated && hydrated.startsWith('data:')) {
               setFallbackSrc(hydrated);
@@ -83,6 +83,8 @@ export const CardPreviewGraphic: React.FC<CardPreviewGraphicProps> = ({
         <img
           src={activeSrc}
           alt={`${title || 'Link'} preview thumbnail`}
+          loading="lazy"
+          decoding="async"
           referrerPolicy="no-referrer"
           onError={handleImageError}
           className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"

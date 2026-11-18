@@ -778,6 +778,81 @@ export function buildAiProfileDiscoveryJson(
   };
 }
 
+export interface AiCatalogEntry {
+  identifier: string;
+  displayName: string;
+  description: string;
+  type: string;
+  url: string;
+  representativeQueries: string[];
+}
+
+export interface AiCatalogManifest {
+  specVersion: '1.0';
+  host: {
+    displayName: string;
+  };
+  entries: AiCatalogEntry[];
+}
+
+/**
+ * Generates an Agentic Resource Discovery (ARD) v1.0 compliant `ai-catalog.json` manifest
+ * (`/.well-known/ai-catalog.json` & `/.well-known/ard.json`) for Chrome Lighthouse Agentic Browsing.
+ */
+export function buildAiCatalogJson(
+  config: SiteConfigState,
+  origin: string
+): AiCatalogManifest {
+  const cleanOrigin = resolveEffectiveOrigin(origin) || 'https://rajdeepbhattacharyya-linkhub.vercel.app';
+  let hostDomain = 'rajdeepbhattacharyya-linkhub.vercel.app';
+  try {
+    const parsedHost = new URL(cleanOrigin).hostname.replace(/[^a-zA-Z0-9.-]/g, '');
+    if (parsedHost && parsedHost !== 'localhost' && parsedHost !== '127.0.0.1') {
+      hostDomain = parsedHost;
+    }
+  } catch {
+    // Keep canonical production domain
+  }
+
+  const displayOwner =
+    (config.profile.fullName || config.profile.name || 'Rajdeep Bhattacharyya').trim();
+
+  return {
+    specVersion: '1.0',
+    host: {
+      displayName: `${displayOwner} — Link Hub`,
+    },
+    entries: [
+      {
+        identifier: `urn:air:${hostDomain}:doc:llms-context`,
+        displayName: `${displayOwner} LLMs Context`,
+        description:
+          'Concise machine-readable Markdown overview of developer identity, skills, projects, and verified social profiles.',
+        type: 'text/markdown',
+        url: `${cleanOrigin}/llms.txt`,
+        representativeQueries: [
+          `Who is ${displayOwner}?`,
+          `What projects and technologies does ${displayOwner} build with?`,
+          `How can I contact or collaborate with ${displayOwner}?`,
+        ],
+      },
+      {
+        identifier: `urn:air:${hostDomain}:data:ai-profile`,
+        displayName: `${displayOwner} Structured AI Profile`,
+        description:
+          'Structured JSON developer profile including Schema.org Person metadata, skills, featured projects, and verified social links.',
+        type: 'application/json',
+        url: `${cleanOrigin}/.well-known/ai-profile.json`,
+        representativeQueries: [
+          `Get ${displayOwner}'s structured developer profile JSON`,
+          `List ${displayOwner}'s verified GitHub, LinkedIn, and Devfolio profiles`,
+          `Show featured SaaS, AI, and hardware links by ${displayOwner}`,
+        ],
+      },
+    ],
+  };
+}
+
 export function auditSeoAndAiDiscoverability(
   config: SiteConfigState
 ): SeoAndGeoAuditResult {

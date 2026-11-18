@@ -781,6 +781,28 @@ export function getWorkspaceGroupForTab(tab: AdminTabId): AdminWorkspaceGroupSpe
   );
 }
 
+export function reorderListItems<T>(
+  items: readonly T[],
+  fromIndex: number,
+  toIndex: number
+): T[] {
+  if (
+    !Number.isInteger(fromIndex) ||
+    !Number.isInteger(toIndex) ||
+    fromIndex < 0 ||
+    toIndex < 0 ||
+    fromIndex >= items.length ||
+    toIndex >= items.length ||
+    fromIndex === toIndex
+  ) {
+    return [...items];
+  }
+  const next = [...items];
+  const [moved] = next.splice(fromIndex, 1);
+  next.splice(toIndex, 0, moved);
+  return next;
+}
+
 export function computeWorkspaceGroupBadges(input: {
   linksCount: number;
   messagesCount: number;

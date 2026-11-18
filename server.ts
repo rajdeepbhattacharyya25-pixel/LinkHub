@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express, { type Request, type Response } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import {
   buildWebsiteScreenshotFallbackUrl,
@@ -21,6 +22,7 @@ import {
   type SiteConfigState,
 } from './src/data/profileData.ts';
 import {
+  buildAiCatalogJson,
   buildAiProfileDiscoveryJson,
   buildLandingSeoMetadata,
   buildLlmsTxt,
@@ -32,6 +34,7 @@ import {
   parseDeveloperSkillsList,
   parseFirestoreRestLink,
   resolveEffectiveOrigin,
+  serializeJsonLdSafe,
 } from './src/utils/seoAndGeo.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -279,7 +282,7 @@ async function readBoundedText(response: globalThis.Response, maxBytes: number):
     }
     result += decoder.decode();
   } finally {
-    reader.cancel().catch(() => {});
+    reader.cancel().catch(() => { });
   }
   return result;
 }
@@ -629,6 +632,17 @@ async function startServer() {
     res.json(buildAiProfileDiscoveryJson(config, origin));
   });
 
+  app.get(
+    ['/.well-known/ai-catalog.json', '/.well-known/ard.json', '/ai-catalog.json'],
+    async (req: Request, res: Response) => {
+      const origin = getRequestOrigin(req);
+      const { config } = await loadLivePublicHubForSeo();
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.setHeader('Cache-Control', 'public, max-age=120');
+      res.json(buildAiCatalogJson(config, origin));
+    }
+  );
+
   app.get('/og-card.svg', async (_req: Request, res: Response) => {
     const { config } = await loadLivePublicHubForSeo();
     res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
@@ -680,6 +694,21 @@ async function startServer() {
       appType: 'spa',
     });
 
+    app.get(['/admin', '/admin/'], async (req: Request, res: Response, next) => {
+      try {
+        const adminPath = path.resolve(__dirname, 'admin.html');
+        const template = fs.readFileSync(adminPath, 'utf-8');
+        const html = await vite.transformIndexHtml(req.originalUrl, template);
+        res.status(200);
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.setHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
+        res.end(html);
+      } catch (err) {
+        vite.ssrFixStacktrace(err as Error);
+        next(err);
+      }
+    });
+
     app.get(
       ['/', '/index.html', '/RajdeepBhattacharyya-LinkHub', '/rajdeepbhattacharyya-linkhub'],
       async (req: Request, res: Response, next) => {
@@ -688,7 +717,10 @@ async function startServer() {
           const template = fs.readFileSync(indexPath, 'utf-8');
           const origin = getRequestOrigin(req);
           const { config } = await loadLivePublicHubForSeo();
-          const enriched = injectSeoIntoHtml(template, config, origin, 'hub');
+          const enriched = injectSeoIntoHtml(template, config, origin, 'hub').replace(
+            '</head>',
+            `<script>window.__LH_INITIAL_HUB__=${serializeJsonLdSafe(config)};</script>\n  </head>`
+          );
           const html = await vite.transformIndexHtml(req.originalUrl, enriched);
           const seoMeta = buildLandingSeoMetadata(config, origin, 'hub');
           res.status(200);
@@ -706,20 +738,120 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distDir = path.resolve(__dirname, 'dist');
-    app.use(express.static(distDir, { index: false }));
+    const compressedAssetCache = new Map<string, { body: Buffer; contentType: string; encoding: string }>();
+
+    // Serve compressed immutable JS/CSS/SVG build assets (mirrors Vercel CDN Brotli/Gzip behavior)
+    app.get('/assets/:filename', (req: Request, res: Response, next) => {
+      const safeName = path.basename(String(req.params.filename || ''));
+      const ext = path.extname(safeName).toLowerCase();
+      const contentType =
+        ext === '.js'
+          ? 'application/javascript; charset=utf-8'
+          : ext === '.css'
+            ? 'text/css; charset=utf-8'
+            : ext === '.svg'
+              ? 'image/svg+xml'
+              : '';
+      if (!contentType) {
+        next();
+        return;
+      }
+
+      const filePath = path.join(distDir, 'assets', safeName);
+      if (!fs.existsSync(filePath)) {
+        next();
+        return;
+      }
+
+      const acceptEncoding = String(req.headers['accept-encoding'] || '');
+      const encoding = acceptEncoding.includes('br')
+        ? 'br'
+        : acceptEncoding.includes('gzip')
+          ? 'gzip'
+          : '';
+
+      if (!encoding) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        next();
+        return;
+      }
+
+      const cacheKey = `${safeName}:${encoding}`;
+      let entry = compressedAssetCache.get(cacheKey);
+      if (!entry) {
+        const raw = fs.readFileSync(filePath);
+        const body =
+          encoding === 'br'
+            ? zlib.brotliCompressSync(raw, {
+              params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 5 },
+            })
+            : zlib.gzipSync(raw, { level: 6 });
+        entry = { body, contentType, encoding };
+        compressedAssetCache.set(cacheKey, entry);
+      }
+
+      res.status(200);
+      res.setHeader('Content-Type', entry.contentType);
+      res.setHeader('Content-Encoding', entry.encoding);
+      res.setHeader('Vary', 'Accept-Encoding');
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      res.setHeader('Content-Length', String(entry.body.byteLength));
+      res.end(entry.body);
+    });
+
+    app.use(
+      express.static(distDir, {
+        index: false,
+        setHeaders: (res, filePath) => {
+          if (filePath.includes(`${path.sep}assets${path.sep}`) || filePath.includes(`${path.sep}icons${path.sep}`)) {
+            res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+          }
+        },
+      })
+    );
+    app.get(['/admin', '/admin/'], (_req: Request, res: Response) => {
+      const adminFile = path.join(distDir, 'admin.html');
+      if (fs.existsSync(adminFile)) {
+        res.status(200);
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.setHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
+        res.sendFile(adminFile);
+      } else {
+        res.status(404).send('Admin build output not found. Run npm run build first.');
+      }
+    });
     app.use(async (req: Request, res: Response) => {
       const indexFile = path.join(distDir, 'index.html');
       if (fs.existsSync(indexFile)) {
         const template = fs.readFileSync(indexFile, 'utf-8');
         const origin = getRequestOrigin(req);
         const { config } = await loadLivePublicHubForSeo();
-        const html = injectSeoIntoHtml(template, config, origin, 'hub');
+        const html = injectSeoIntoHtml(template, config, origin, 'hub').replace(
+          '</head>',
+          `<script>window.__LH_INITIAL_HUB__=${serializeJsonLdSafe(config)};</script>\n  </head>`
+        );
         const seoMeta = buildLandingSeoMetadata(config, origin, 'hub');
+        const acceptEncoding = String(req.headers['accept-encoding'] || '');
         res.status(200);
         res.setHeader('Content-Type', 'text/html; charset=utf-8');
         res.setHeader('X-Robots-Tag', seoMeta.robots);
         res.setHeader('Link', '</llms.txt>; rel="alternate"; type="text/plain"');
-        res.send(html);
+        res.setHeader('Vary', 'Accept-Encoding');
+        if (acceptEncoding.includes('br')) {
+          const compressed = zlib.brotliCompressSync(Buffer.from(html, 'utf-8'), {
+            params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 },
+          });
+          res.setHeader('Content-Encoding', 'br');
+          res.setHeader('Content-Length', String(compressed.byteLength));
+          res.end(compressed);
+        } else if (acceptEncoding.includes('gzip')) {
+          const compressed = zlib.gzipSync(Buffer.from(html, 'utf-8'), { level: 6 });
+          res.setHeader('Content-Encoding', 'gzip');
+          res.setHeader('Content-Length', String(compressed.byteLength));
+          res.end(compressed);
+        } else {
+          res.send(html);
+        }
       } else {
         res.status(404).send('Build output not found. Run npm run build first.');
       }

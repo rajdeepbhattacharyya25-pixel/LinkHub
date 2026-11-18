@@ -5,7 +5,10 @@ import {
   bytesToBase64Url,
   derEcdsaToP1363,
   detectBiometricPlatform,
+  formatWebAuthnFriendlyError,
+  selectPreferredPasskeysForDevice,
   verifyWebAuthnAssertion,
+  type AdminPasskeyRecord,
 } from './biometricAuth';
 
 function p1363ToDer(sig: Uint8Array): Uint8Array {
@@ -213,4 +216,61 @@ test('verifyWebAuthnAssertion accepts valid ES256 biometric assertion and blocks
     expectedRpId: 'example.dev',
   });
   assert.equal(badOrigin.verified, false);
+});
+
+test('selectPreferredPasskeysForDevice prioritizes local device passkey with fresh cloud metadata', () => {
+  const winCloud: AdminPasskeyRecord = {
+    credentialId: 'cred-win',
+    ownerUid: 'owner-1',
+    ownerEmail: 'owner@example.com',
+    deviceLabel: 'Windows PC',
+    platform: 'windows',
+    publicKeySpki: 'spki-win',
+    algorithm: -7,
+    transports: ['internal'],
+    signCount: 4,
+  };
+  const androidCloud: AdminPasskeyRecord = {
+    credentialId: 'cred-android',
+    ownerUid: 'owner-1',
+    ownerEmail: 'owner@example.com',
+    deviceLabel: 'Pixel 8',
+    platform: 'android',
+    publicKeySpki: 'spki-android',
+    algorithm: -7,
+    transports: ['internal'],
+    signCount: 9,
+  };
+  const androidLocalStale: AdminPasskeyRecord = {
+    ...androidCloud,
+    signCount: 2,
+  };
+
+  // When paired locally on Android, select ONLY the local credential (with latest cloud signCount)
+  const localSelected = selectPreferredPasskeysForDevice(
+    [winCloud, androidCloud],
+    [androidLocalStale],
+    'android'
+  );
+  assert.equal(localSelected.length, 1);
+  assert.equal(localSelected[0].credentialId, 'cred-android');
+  assert.equal(localSelected[0].signCount, 9);
+
+  // When localStorage was cleared on Android, fall back to same-platform cloud passkey
+  const platformFallback = selectPreferredPasskeysForDevice(
+    [winCloud, androidCloud],
+    [],
+    'android'
+  );
+  assert.equal(platformFallback.length, 1);
+  assert.equal(platformFallback[0].credentialId, 'cred-android');
+
+  // When on a brand-new platform, fall back to all cloud passkeys
+  const allFallback = selectPreferredPasskeysForDevice([winCloud, androidCloud], [], 'ios');
+  assert.equal(allFallback.length, 2);
+
+  // Friendly error formatting handles AbortError cleanly
+  const androidInfo = detectBiometricPlatform('Mozilla/5.0 (Linux; Android 14)');
+  const abortErr = new DOMException('Aborted', 'AbortError');
+  assert.match(formatWebAuthnFriendlyError(abortErr, androidInfo), /cancelled or timed out/i);
 });

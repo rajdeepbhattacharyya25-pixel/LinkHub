@@ -115,24 +115,33 @@
 @media (max-width: 767px) {
   .bg-espresso-canvas {
     background-attachment: scroll;
+    background-image:
+      radial-gradient(circle at 18% 12%, rgba(255, 255, 255, 0.1) 0%, transparent 50%),
+      radial-gradient(circle at 50% 92%, rgba(0, 0, 0, 0.3) 0%, transparent 65%);
+    background-size: 100% 100%, 100% 100%;
+  }
+
+  /* Avoid expensive fixed blend-mode & grain compositing on mobile touch scroll */
+  .bg-espresso-canvas::before,
+  .bg-espresso-canvas::after {
+    display: none;
   }
 }
 
-/* Analog suede / fine paper noise grain layer */
+/* Lightweight static grain tile (replaces CPU-heavy SVG feTurbulence filter) */
 .bg-espresso-canvas::before {
   content: "";
   position: fixed;
   inset: 0;
   pointer-events: none;
   z-index: 0;
-  opacity: 0.28;
-  mix-blend-mode: overlay;
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+  opacity: 0.22;
+  background-image: url("/assets/grain-tile.png");
   background-repeat: repeat;
-  background-size: 160px 160px;
+  background-size: 128px 128px;
 }
 
-/* Soft vignette & topographic contour ring depth */
+/* Soft vignette depth */
 .bg-espresso-canvas::after {
   content: "";
   position: fixed;
@@ -140,7 +149,43 @@
   pointer-events: none;
   z-index: 0;
   background-image:
-    radial-gradient(circle at 50% 38%, transparent 30%, rgba(16, 12, 10, 0.26) 100%);
+    radial-gradient(circle at 50% 38%, transparent 30%, rgba(16, 12, 10, 0.24) 100%);
+}
+
+/* Defer off-screen layout/paint for below-the-fold landing sections */
+.lh-defer-section {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 420px;
+}
+
+/* Pure GPU-composited signature reveal animations (zero per-frame JS loops) */
+@keyframes lh-sig-sweep {
+  from {
+    clip-path: inset(0 100% 0 0);
+  }
+  to {
+    clip-path: inset(0 0% 0 0);
+  }
+}
+
+.lh-sig-reveal-body {
+  clip-path: inset(0 100% 0 0);
+  animation: lh-sig-sweep 760ms cubic-bezier(0.22, 1, 0.36, 1) 60ms forwards;
+  will-change: clip-path;
+}
+
+.lh-sig-reveal-crown {
+  clip-path: inset(0 100% 0 0);
+  animation: lh-sig-sweep 340ms cubic-bezier(0.22, 1, 0.36, 1) 720ms forwards;
+  will-change: clip-path;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lh-sig-reveal-body,
+  .lh-sig-reveal-crown {
+    clip-path: none;
+    animation: none;
+  }
 }
 
 /* Fine heavyweight cotton-paper texture for the central champagne card */

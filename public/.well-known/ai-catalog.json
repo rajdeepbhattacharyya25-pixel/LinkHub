@@ -1,0 +1,32 @@
+{
+  "specVersion": "1.0",
+  "host": {
+    "displayName": "Rajdeep Bhattacharyya — Link Hub"
+  },
+  "entries": [
+    {
+      "identifier": "urn:air:rajdeepbhattacharyya-linkhub.vercel.app:doc:llms-context",
+      "displayName": "Rajdeep Bhattacharyya LLMs Context",
+      "description": "Concise machine-readable Markdown overview of developer identity, skills, projects, and verified social profiles.",
+      "type": "text/markdown",
+      "url": "https://rajdeepbhattacharyya-linkhub.vercel.app/llms.txt",
+      "representativeQueries": [
+        "Who is Rajdeep Bhattacharyya?",
+        "What projects and technologies does Rajdeep Bhattacharyya build with?",
+        "How can I contact or collaborate with Rajdeep Bhattacharyya?"
+      ]
+    },
+    {
+      "identifier": "urn:air:rajdeepbhattacharyya-linkhub.vercel.app:data:ai-profile",
+      "displayName": "Rajdeep Bhattacharyya Structured AI Profile",
+      "description": "Structured JSON developer profile including Schema.org Person metadata, skills, featured projects, and verified social links.",
+      "type": "application/json",
+      "url": "https://rajdeepbhattacharyya-linkhub.vercel.app/.well-known/ai-profile.json",
+      "representativeQueries": [
+        "Get Rajdeep Bhattacharyya's structured developer profile JSON",
+        "List Rajdeep Bhattacharyya's verified GitHub, LinkedIn, and Devfolio profiles",
+        "Show featured SaaS, AI, and hardware links by Rajdeep Bhattacharyya"
+      ]
+    }
+  ]
+}

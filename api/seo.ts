@@ -169,6 +169,7 @@ function extractTypeParam(req: ServerlessReq): string {
       if (p.endsWith('llms-full.txt')) return 'llms-full';
       if (p.endsWith('llms.txt')) return 'llms';
       if (p.endsWith('ai-profile.json')) return 'ai-profile';
+      if (p.endsWith('ai-catalog.json') || p.endsWith('ard.json')) return 'ai-catalog';
       if (p.endsWith('og-card.svg')) return 'og-card';
     } catch {
       return '';
@@ -278,24 +279,24 @@ async function loadLiveHubData(): Promise<PublicHubData> {
 
     const socials = Array.isArray(decodedHub?.socials)
       ? (decodedHub.socials as Array<Record<string, unknown>>)
-          .filter((s) => s && typeof s.url === 'string' && s.url.trim())
-          .map((s) => ({
-            platform: String(s.platform || 'link'),
-            label: String(s.label || s.platform || 'Link'),
-            url: String(s.url || '').trim(),
-          }))
+        .filter((s) => s && typeof s.url === 'string' && s.url.trim())
+        .map((s) => ({
+          platform: String(s.platform || 'link'),
+          label: String(s.label || s.platform || 'Link'),
+          url: String(s.url || '').trim(),
+        }))
       : [];
 
     const posts = Array.isArray(decodedHub?.posts)
       ? (decodedHub.posts as Array<Record<string, unknown>>)
-          .filter((p) => p && typeof p.title === 'string' && p.title.trim())
-          .map((p) => ({
-            slug: String(p.slug || ''),
-            title: String(p.title || '').trim(),
-            excerpt: String(p.excerpt || '').trim(),
-            date: String(p.date || '').trim(),
-            content: Array.isArray(p.content) ? p.content.map(String) : [],
-          }))
+        .filter((p) => p && typeof p.title === 'string' && p.title.trim())
+        .map((p) => ({
+          slug: String(p.slug || ''),
+          title: String(p.title || '').trim(),
+          excerpt: String(p.excerpt || '').trim(),
+          date: String(p.date || '').trim(),
+          content: Array.isArray(p.content) ? p.content.map(String) : [],
+        }))
       : [];
 
     let links: PublicLinkSummary[] = [];
@@ -636,6 +637,55 @@ export default async function handler(req: ServerlessReq, res: ServerlessRes) {
       res.setHeader('Cache-Control', 'public, s-maxage=120, stale-while-revalidate=300');
       res.status(200).json(buildAiProfileJson(data, origin));
       return;
+    case 'ai-catalog': {
+      let hostDomain = 'rajdeepbhattacharyya-linkhub.vercel.app';
+      try {
+        const parsedHost = new URL(origin).hostname.replace(/[^a-zA-Z0-9.-]/g, '');
+        if (parsedHost && parsedHost !== 'localhost' && parsedHost !== '127.0.0.1') {
+          hostDomain = parsedHost;
+        }
+      } catch {
+        // Keep canonical domain
+      }
+      const ownerName = (data.fullName || data.name || 'Rajdeep Bhattacharyya').trim();
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.setHeader('Cache-Control', 'public, s-maxage=120, stale-while-revalidate=300');
+      res.status(200).json({
+        specVersion: '1.0',
+        host: {
+          displayName: `${ownerName} — Link Hub`,
+        },
+        entries: [
+          {
+            identifier: `urn:air:${hostDomain}:doc:llms-context`,
+            displayName: `${ownerName} LLMs Context`,
+            description:
+              'Concise machine-readable Markdown overview of developer identity, skills, projects, and verified social profiles.',
+            type: 'text/markdown',
+            url: `${origin}/llms.txt`,
+            representativeQueries: [
+              `Who is ${ownerName}?`,
+              `What projects and technologies does ${ownerName} build with?`,
+              `How can I contact or collaborate with ${ownerName}?`,
+            ],
+          },
+          {
+            identifier: `urn:air:${hostDomain}:data:ai-profile`,
+            displayName: `${ownerName} Structured AI Profile`,
+            description:
+              'Structured JSON developer profile including Schema.org Person metadata, skills, featured projects, and verified social links.',
+            type: 'application/json',
+            url: `${origin}/.well-known/ai-profile.json`,
+            representativeQueries: [
+              `Get ${ownerName}'s structured developer profile JSON`,
+              `List ${ownerName}'s verified GitHub, LinkedIn, and Devfolio profiles`,
+              `Show featured SaaS, AI, and hardware links by ${ownerName}`,
+            ],
+          },
+        ],
+      });
+      return;
+    }
 
     case 'og-card':
       res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');

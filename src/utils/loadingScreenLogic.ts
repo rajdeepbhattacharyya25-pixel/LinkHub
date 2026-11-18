@@ -1,8 +1,10 @@
 import type { ProfileConfig } from '../data/profileData';
 
 export const DEFAULT_LOADING_SCREEN_DURATION_MS = 1500;
+export const FAST_SPLASH_DURATION_MS = 820;
 export const SIGNATURE_ANIMATION_DURATION_MS = 1080;
 export const FALLBACK_OWNER_FULL_NAME = 'Rajdeep Bhattacharyya';
+export const SPLASH_SEEN_SESSION_KEY = 'linkhub_splash_seen_v1';
 
 /**
  * Resolves the full name displayed below the portrait outline sketch on the loading screen.
@@ -39,6 +41,32 @@ export function shouldHoldLoadingScreen(search: string): boolean {
   if (!search) return false;
   const params = new URLSearchParams(search.startsWith('?') ? search : `?${search}`);
   return params.get('holdSplash') === '1';
+}
+
+export function shouldBypassInitialSplash(search: string): boolean {
+  if (shouldHoldLoadingScreen(search)) return false;
+  if (shouldSkipLoadingScreen(search)) return true;
+  if (typeof window === 'undefined') return false;
+  try {
+    if (
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    ) {
+      return true;
+    }
+    return window.sessionStorage.getItem(SPLASH_SEEN_SESSION_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function markSplashSeenInSession(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.setItem(SPLASH_SEEN_SESSION_KEY, '1');
+  } catch {
+    // Ignore restricted sessionStorage environments
+  }
 }
 
 export function clamp01(value: number): number {

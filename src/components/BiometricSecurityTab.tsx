@@ -106,6 +106,7 @@ export const BiometricSecurityTab: React.FC<BiometricSecurityTabProps> = ({
         ownerEmail,
         displayName,
         deviceLabel: deviceLabel.trim() || platformInfo.deviceDefaultName,
+        existingCredentialIds: passkeys.map((p) => p.credentialId),
       });
       await saveAdminPasskeyToFirestore(record);
       onToggleBiometricLock(true);
@@ -166,9 +167,9 @@ export const BiometricSecurityTab: React.FC<BiometricSecurityTabProps> = ({
           <p className="text-[11px] sm:text-xs text-[#FAF6F0]/85 leading-relaxed">
             Pair your phone or computer once after Google Sign-In. Returning to{' '}
             <code className="px-1.5 py-0.5 rounded bg-[#1A120E]/60 font-ibm-mono text-[10.5px]">
-              #admin
+              /admin
             </code>{' '}
-            unlocks directly with hardware WebAuthn biometrics verified against Firestore.
+            auto-prompts hardware WebAuthn biometrics verified against Firestore.
           </p>
         </div>
 
@@ -244,7 +245,7 @@ export const BiometricSecurityTab: React.FC<BiometricSecurityTabProps> = ({
               onChange={(e) => onToggleBiometricLock(e.target.checked)}
               className="w-4 h-4 accent-[#3A2418] shrink-0"
             />
-            <span>Require biometric unlock whenever returning to #admin</span>
+            <span>Require biometric unlock whenever returning to /admin</span>
           </label>
 
           <button
@@ -333,9 +334,17 @@ export const BiometricSecurityTab: React.FC<BiometricSecurityTabProps> = ({
                               {pk.deviceLabel}
                             </button>
                           )}
-                          <p className="text-[11px] text-[#3A2418]">
-                            {getPlatformHumanLabel(pk.platform)}
-                            {isThisBrowser ? ' · Paired on this browser' : ''}
+                          <p className="text-[11px] text-[#3A2418] flex flex-wrap items-center gap-1.5">
+                            <span>{getPlatformHumanLabel(pk.platform)}</span>
+                            <span
+                              className={`px-1.5 py-0.5 rounded font-ibm-mono text-[9.5px] font-bold uppercase ${
+                                isThisBrowser
+                                  ? 'bg-[#2E5E3E] text-[#FAF6F0]'
+                                  : 'bg-[#FAF6F0] border border-[#B89B7E] text-[#5C3D24]'
+                              }`}
+                            >
+                              {isThisBrowser ? 'This Device' : 'Other Device'}
+                            </span>
                           </p>
                         </div>
                       </div>

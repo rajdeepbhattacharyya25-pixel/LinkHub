@@ -440,7 +440,7 @@ export function formatWebAuthnFriendlyError(err: unknown, platformInfo: Biometri
   ) {
     return `Embedded preview frames restrict ${platformInfo.biometricName}. Open your Link Hub URL in a dedicated browser tab to enroll or unlock with ${platformInfo.biometricName}.`;
   }
-  if (name === 'NotAllowedError') {
+  if (name === 'NotAllowedError' || name === 'AbortError') {
     return `${platformInfo.biometricName} verification was cancelled or timed out.`;
   }
   if (name === 'InvalidStateError') {
@@ -449,11 +449,46 @@ export function formatWebAuthnFriendlyError(err: unknown, platformInfo: Biometri
   return msg || `${platformInfo.biometricName} verification failed.`;
 }
 
+export function selectPreferredPasskeysForDevice(
+  cloudPasskeys: AdminPasskeyRecord[],
+  localPasskeys: AdminPasskeyRecord[],
+  currentPlatform: BiometricPlatform
+): AdminPasskeyRecord[] {
+  const cloudById = new Map<string, AdminPasskeyRecord>();
+  for (const pk of cloudPasskeys) {
+    cloudById.set(pk.credentialId, pk);
+  }
+
+  // 1. Prefer passkeys explicitly paired in this browser (enriched with freshest cloud signCount/label)
+  const matchedLocal: AdminPasskeyRecord[] = [];
+  for (const local of localPasskeys) {
+    const cloudMatch = cloudById.get(local.credentialId);
+    if (cloudMatch) {
+      matchedLocal.push(cloudMatch);
+    } else if (cloudPasskeys.length === 0) {
+      matchedLocal.push(local);
+    }
+  }
+  if (matchedLocal.length > 0) {
+    return matchedLocal;
+  }
+
+  // 2. Fall back to cloud passkeys registered on the same platform (e.g. Android after clearing localStorage)
+  const samePlatform = cloudPasskeys.filter((pk) => pk.platform === currentPlatform);
+  if (samePlatform.length > 0) {
+    return samePlatform;
+  }
+
+  // 3. Final fallback: all cloud passkeys, or local cache
+  return cloudPasskeys.length > 0 ? cloudPasskeys : localPasskeys;
+}
+
 export async function registerOwnerBiometricPasskey(params: {
   ownerUid: string;
   ownerEmail: string;
   displayName: string;
   deviceLabel?: string;
+  existingCredentialIds?: string[];
 }): Promise<AdminPasskeyRecord> {
   if (typeof window === 'undefined' || !window.PublicKeyCredential || !navigator.credentials) {
     throw new Error('WebAuthn platform biometrics are not supported in this browser.');
@@ -463,6 +498,16 @@ export async function registerOwnerBiometricPasskey(params: {
   const challenge = new Uint8Array(32);
   window.crypto.getRandomValues(challenge);
   const userIdBytes = new TextEncoder().encode(params.ownerUid);
+
+  const excludeCredentials: PublicKeyCredentialDescriptor[] = (
+    params.existingCredentialIds || []
+  )
+    .filter((id) => Boolean(id && id.trim()))
+    .map((id) => ({
+      id: toStrictArrayBuffer(base64UrlToBytes(id)),
+      type: 'public-key',
+      transports: ['internal'],
+    }));
 
   try {
     const credential = (await navigator.credentials.create({
@@ -481,6 +526,7 @@ export async function registerOwnerBiometricPasskey(params: {
           { type: 'public-key', alg: -7 },
           { type: 'public-key', alg: -257 },
         ],
+        excludeCredentials,
         authenticatorSelection: {
           authenticatorAttachment: 'platform',
           residentKey: 'preferred',

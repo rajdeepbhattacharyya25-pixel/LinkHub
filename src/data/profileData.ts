@@ -5,12 +5,139 @@ import type { PantoneHarmonyMode } from '../utils/pantoneAndAnalytics';
 export type SocialPlatform =
   | 'x'
   | 'github'
-  | 'medium'
   | 'linkedin'
-  | 'stackoverflow'
   | 'instagram'
+  | 'threads'
+  | 'discord'
+  | 'telegram'
+  | 'devfolio'
+  | 'youtube'
+  | 'kaggle'
+  | 'unstop'
+  | 'medium'
+  | 'stackoverflow'
   | 'spotify'
-  | 'soundcloud';
+  | 'soundcloud'
+  | 'website';
+
+export interface SocialPlatformMeta {
+  label: string;
+  optionLabel: string;
+  handlePlaceholder: string;
+  urlPlaceholder: string;
+}
+
+export const SOCIAL_PLATFORM_META: Record<SocialPlatform, SocialPlatformMeta> = {
+  devfolio: {
+    label: 'Devfolio',
+    optionLabel: 'Devfolio (Hackathons)',
+    handlePlaceholder: '@username',
+    urlPlaceholder: 'https://devfolio.co/@username',
+  },
+  github: {
+    label: 'GitHub',
+    optionLabel: 'GitHub',
+    handlePlaceholder: '@username',
+    urlPlaceholder: 'https://github.com/username',
+  },
+  linkedin: {
+    label: 'LinkedIn',
+    optionLabel: 'LinkedIn',
+    handlePlaceholder: 'in/username',
+    urlPlaceholder: 'https://linkedin.com/in/username',
+  },
+  instagram: {
+    label: 'Instagram',
+    optionLabel: 'Instagram',
+    handlePlaceholder: '@username',
+    urlPlaceholder: 'https://instagram.com/username',
+  },
+  threads: {
+    label: 'Threads',
+    optionLabel: 'Threads',
+    handlePlaceholder: '@username',
+    urlPlaceholder: 'https://threads.net/@username',
+  },
+  discord: {
+    label: 'Discord',
+    optionLabel: 'Discord',
+    handlePlaceholder: '@username or Server',
+    urlPlaceholder: 'https://discord.gg/invite-or-user',
+  },
+  telegram: {
+    label: 'Telegram',
+    optionLabel: 'Telegram',
+    handlePlaceholder: '@username',
+    urlPlaceholder: 'https://t.me/username',
+  },
+  x: {
+    label: 'X',
+    optionLabel: 'X (Twitter)',
+    handlePlaceholder: '@username',
+    urlPlaceholder: 'https://x.com/username',
+  },
+  youtube: {
+    label: 'YouTube',
+    optionLabel: 'YouTube',
+    handlePlaceholder: '@channel',
+    urlPlaceholder: 'https://youtube.com/@channel',
+  },
+  kaggle: {
+    label: 'Kaggle',
+    optionLabel: 'Kaggle',
+    handlePlaceholder: '@username',
+    urlPlaceholder: 'https://kaggle.com/username',
+  },
+  unstop: {
+    label: 'Unstop',
+    optionLabel: 'Unstop (Hackathons)',
+    handlePlaceholder: '@username',
+    urlPlaceholder: 'https://unstop.com/u/username',
+  },
+  medium: {
+    label: 'Medium',
+    optionLabel: 'Medium',
+    handlePlaceholder: '@username',
+    urlPlaceholder: 'https://medium.com/@username',
+  },
+  stackoverflow: {
+    label: 'Stack Overflow',
+    optionLabel: 'Stack Overflow',
+    handlePlaceholder: 'users/id',
+    urlPlaceholder: 'https://stackoverflow.com/users/...',
+  },
+  spotify: {
+    label: 'Spotify',
+    optionLabel: 'Spotify',
+    handlePlaceholder: '@username',
+    urlPlaceholder: 'https://open.spotify.com/user/...',
+  },
+  soundcloud: {
+    label: 'SoundCloud',
+    optionLabel: 'SoundCloud',
+    handlePlaceholder: '@username',
+    urlPlaceholder: 'https://soundcloud.com/username',
+  },
+  website: {
+    label: 'Website',
+    optionLabel: 'Custom Website / Link',
+    handlePlaceholder: 'domain.com',
+    urlPlaceholder: 'https://your-site.com',
+  },
+};
+
+export const SOCIAL_PLATFORM_LIST: SocialPlatform[] = Object.keys(
+  SOCIAL_PLATFORM_META
+) as SocialPlatform[];
+
+export function isSocialPlatform(value: unknown): value is SocialPlatform {
+  return typeof value === 'string' && value in SOCIAL_PLATFORM_META;
+}
+
+export function normalizeSocialPlatform(value: unknown): SocialPlatform {
+  if (isSocialPlatform(value)) return value;
+  return 'website';
+}
 
 export interface SocialLink {
   id: string;
@@ -409,7 +536,12 @@ export function normalizeSiteConfig(parsed: Partial<SiteConfigState>): SiteConfi
     profile: mergedProfile,
     designSystem: { ...DEFAULT_SITE_CONFIG.designSystem, ...(parsed.designSystem || {}) },
     featuredSong: mergedSong,
-    socials: Array.isArray(parsed.socials) ? parsed.socials : DEFAULT_SITE_CONFIG.socials,
+    socials: Array.isArray(parsed.socials)
+      ? parsed.socials.map((soc) => ({
+          ...soc,
+          platform: normalizeSocialPlatform(soc?.platform),
+        }))
+      : DEFAULT_SITE_CONFIG.socials,
     links: cleanLinks,
     customCategories: Array.isArray(parsed.customCategories)
       ? parsed.customCategories
@@ -444,9 +576,17 @@ export function loadSavedSiteConfig(): SiteConfigState {
     return DEFAULT_SITE_CONFIG;
   }
   try {
+    const bootstrapped = (
+      window as { __LH_INITIAL_HUB__?: Partial<SiteConfigState> }
+    ).__LH_INITIAL_HUB__;
+    if (bootstrapped && !isUntouchedLegacyDemoHub(bootstrapped)) {
+      const normalized = normalizeSiteConfig(bootstrapped);
+      if (isHubConfigured(normalized)) {
+        return normalized;
+      }
+    }
     const raw = window.localStorage.getItem(SITE_CONFIG_STORAGE_KEY);
     if (!raw) {
-      window.localStorage.setItem(SITE_CONFIG_STORAGE_KEY, JSON.stringify(DEFAULT_SITE_CONFIG));
       return DEFAULT_SITE_CONFIG;
     }
     const parsed = JSON.parse(raw) as Partial<SiteConfigState>;

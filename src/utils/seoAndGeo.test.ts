@@ -373,6 +373,31 @@ test('Vercel api/seo serves robots, sitemap, llms, llms-full, ai-profile, and og
     'https://rajdeepbhattacharyya-linkhub.vercel.app/RajdeepBhattacharyya-LinkHub'
   );
 
+  const catalogRes = createMockRes();
+  await seoHandler({ ...reqBase, query: { type: 'ai-catalog' } }, catalogRes);
+  assert.equal(catalogRes.getResult().statusCode, 200);
+  const catalogBody = catalogRes.getResult().body as {
+    specVersion?: string;
+    host?: { displayName?: string };
+    entries?: Array<{
+      identifier?: string;
+      displayName?: string;
+      type?: string;
+      url?: string;
+      representativeQueries?: string[];
+    }>;
+  };
+  assert.equal(catalogBody.specVersion, '1.0');
+  assert.ok(catalogBody.host?.displayName);
+  assert.ok(Array.isArray(catalogBody.entries) && catalogBody.entries.length >= 2);
+  for (const entry of catalogBody.entries) {
+    assert.match(entry.identifier || '', /^urn:air:[a-zA-Z0-9.-]+(:[a-zA-Z0-9._-]+)+$/);
+    assert.ok(entry.displayName);
+    assert.ok(entry.type);
+    assert.ok(entry.url?.startsWith('https://'));
+    assert.ok(Array.isArray(entry.representativeQueries) && entry.representativeQueries.length >= 2);
+  }
+
   const ogRes = createMockRes();
   await seoHandler({ ...reqBase, query: { type: 'og-card' } }, ogRes);
   assert.equal(ogRes.getResult().statusCode, 200);

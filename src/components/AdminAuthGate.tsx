@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Lock,
   ShieldAlert,
@@ -16,8 +16,11 @@ import {
   authenticateWithBiometricPasskey,
   detectBiometricPlatform,
   loadPairedDevicePasskeys,
+  savePairedDevicePasskey,
+  selectPreferredPasskeysForDevice,
   type AdminPasskeyRecord,
 } from '../utils/biometricAuth';
+import { registerAdminServiceWorker } from '../utils/adminPwa';
 
 export interface AdminAuthGateProps {
   authLoading: boolean;
@@ -54,11 +57,84 @@ export const AdminAuthGate: React.FC<AdminAuthGateProps> = ({
   const [signingIn, setSigningIn] = useState(false);
   const [verifyingBiometric, setVerifyingBiometric] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const autoPromptAttemptedRef = useRef(false);
+
+  useEffect(() => {
+    void registerAdminServiceWorker();
+  }, []);
 
   const platformInfo = detectBiometricPlatform();
   const localPairedPasskeys = loadPairedDevicePasskeys(ownerEmail);
-  const effectivePasskeys =
-    passkeys.length > 0 ? passkeys : localPairedPasskeys;
+  const effectivePasskeys = selectPreferredPasskeysForDevice(
+    passkeys,
+    localPairedPasskeys,
+    platformInfo.platform
+  );
+
+  const handleBiometricUnlock = async (
+    wasSignedOut: boolean,
+    options?: { silentCancel?: boolean }
+  ) => {
+    setAuthError(null);
+    setVerifyingBiometric(true);
+    try {
+      const candidateList = wasSignedOut
+        ? localPairedPasskeys
+        : effectivePasskeys;
+      const verified = await authenticateWithBiometricPasskey({
+        passkeys: candidateList,
+      });
+
+      // Keep local paired device cache fresh after verified unlock
+      savePairedDevicePasskey({
+        ...verified.matchedPasskey,
+        signCount: verified.nextSignCount,
+      });
+
+      if (wasSignedOut) {
+        await onSignInWithGoogle();
+      }
+
+      await onBiometricUnlockSuccess({
+        credentialId: verified.credentialId,
+        nextSignCount: verified.nextSignCount,
+        deviceLabel: verified.matchedPasskey.deviceLabel,
+        wasSignedOut,
+      });
+    } catch (err) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : `${platformInfo.biometricName} verification failed.`;
+      if (!options?.silentCancel) {
+        setAuthError(msg);
+      }
+    } finally {
+      setVerifyingBiometric(false);
+    }
+  };
+
+  // Auto-prompt fingerprint / biometric unlock once when signed-in owner opens locked /admin
+  useEffect(() => {
+    if (!biometricLockRequired) {
+      autoPromptAttemptedRef.current = false;
+      return;
+    }
+    if (
+      authLoading ||
+      !guardEvaluation.authorized ||
+      autoPromptAttemptedRef.current ||
+      effectivePasskeys.length === 0
+    ) {
+      return;
+    }
+    autoPromptAttemptedRef.current = true;
+    const timer = window.setTimeout(() => {
+      void handleBiometricUnlock(false, { silentCancel: true });
+    }, 220);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authLoading, guardEvaluation.authorized, biometricLockRequired, effectivePasskeys.length]);
 
   if (guardEvaluation.authorized && !biometricLockRequired && !authLoading) {
     return <>{children}</>;
@@ -90,40 +166,8 @@ export const AdminAuthGate: React.FC<AdminAuthGateProps> = ({
     }
   };
 
-  const handleBiometricUnlock = async (wasSignedOut: boolean) => {
-    setAuthError(null);
-    setVerifyingBiometric(true);
-    try {
-      const candidateList = wasSignedOut
-        ? localPairedPasskeys
-        : effectivePasskeys;
-      const verified = await authenticateWithBiometricPasskey({
-        passkeys: candidateList,
-      });
-
-      if (wasSignedOut) {
-        await onSignInWithGoogle();
-      }
-
-      await onBiometricUnlockSuccess({
-        credentialId: verified.credentialId,
-        nextSignCount: verified.nextSignCount,
-        deviceLabel: verified.matchedPasskey.deviceLabel,
-        wasSignedOut,
-      });
-    } catch (err) {
-      const msg =
-        err instanceof Error
-          ? err.message
-          : `${platformInfo.biometricName} verification failed.`;
-      setAuthError(msg);
-    } finally {
-      setVerifyingBiometric(false);
-    }
-  };
-
   return (
-    <div className="relative z-10 min-h-screen flex items-center justify-center px-3 sm:px-4 py-8 sm:py-16 font-manrope">
+    <div className="relative z-10 min-h-screen flex items-center justify-center px-3 sm:px-4 pt-[max(2rem,env(safe-area-inset-top))] pb-[max(2rem,env(safe-area-inset-bottom))] sm:py-16 font-manrope">
       <main
         aria-label="Protected Solo Admin Security Gate"
         className="w-full max-w-[460px] rounded-[24px] sm:rounded-[28px] bg-[#F4EDE2] border border-[#D5C4AE] text-[#1A120E] p-5 sm:p-8 shadow-[0_24px_60px_-15px_rgba(26,18,14,0.52)] space-y-5"

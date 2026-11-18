@@ -2,10 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   DEFAULT_LOADING_SCREEN_DURATION_MS,
+  FAST_SPLASH_DURATION_MS,
   FALLBACK_OWNER_FULL_NAME,
   resolveLoadingFullName,
   shouldSkipLoadingScreen,
   shouldHoldLoadingScreen,
+  shouldBypassInitialSplash,
   computePortraitSketchAlpha,
   computeSignatureInkAlpha,
   isSignatureCrownRegion,
@@ -85,4 +87,11 @@ test('clamp01 and smoothstep behave deterministically', () => {
   assert.equal(smoothstep(0.1, 0.5, 0.6), 1);
   const mid = smoothstep(0.1, 0.5, 0.3);
   assert.ok(mid > 0.49 && mid < 0.51);
+});
+
+test('FAST_SPLASH_DURATION_MS is snappy (< 1000ms) and shouldBypassInitialSplash respects query overrides', () => {
+  assert.ok(FAST_SPLASH_DURATION_MS >= 600 && FAST_SPLASH_DURATION_MS <= 950);
+  assert.equal(shouldBypassInitialSplash('?skipSplash=1'), true);
+  assert.equal(shouldBypassInitialSplash('?holdSplash=1'), false);
+  assert.equal(shouldBypassInitialSplash(''), false);
 });

@@ -1,0 +1,57 @@
+{
+  "id": "/admin",
+  "name": "Link Hub Admin Studio",
+  "short_name": "LinkHub Admin",
+  "description": "Private owner studio to manage links, social profiles, themes, analytics, and messages.",
+  "start_url": "/admin",
+  "scope": "/admin",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait-primary",
+  "background_color": "#1A120E",
+  "theme_color": "#4A3324",
+  "categories": ["productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/icons/admin-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/admin-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/admin-icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Manage Links",
+      "short_name": "Links",
+      "description": "Add, edit, or reorder Link Hub cards",
+      "url": "/admin?tab=links",
+      "icons": [{ "src": "/icons/admin-icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Social Profiles",
+      "short_name": "Socials",
+      "description": "Manage Devfolio, Instagram, Threads, Discord & Telegram",
+      "url": "/admin?tab=socials",
+      "icons": [{ "src": "/icons/admin-icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Inbox & Security",
+      "short_name": "Inbox",
+      "description": "Check messages and biometric passkeys",
+      "url": "/admin?tab=messages",
+      "icons": [{ "src": "/icons/admin-icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ]
+}

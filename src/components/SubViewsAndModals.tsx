@@ -132,14 +132,23 @@ export const WorkWithMeView: React.FC<{
             </div>
           )}
 
-          <form onSubmit={handleSubmit} noValidate className="space-y-4">
+          <form
+            onSubmit={handleSubmit}
+            noValidate
+            toolname="send_work_inquiry"
+            tooldescription="Submit a work, hackathon, or project collaboration inquiry to the site owner."
+            className="space-y-4"
+          >
             <div className="space-y-1.5">
               <label htmlFor="work-name" className="block text-[13px] sm:text-xs font-bold text-[#1A120E]">
                 Your name <span className="text-[#6B4A2E]">*</span>
               </label>
               <input
                 id="work-name"
+                name="name"
                 type="text"
+                required
+                toolparamdescription="Sender's full name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="Your full name"
@@ -154,7 +163,10 @@ export const WorkWithMeView: React.FC<{
               </label>
               <input
                 id="work-email"
+                name="email"
                 type="email"
+                required
+                toolparamdescription="Sender's email address for follow-up"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="name@example.com"
@@ -169,7 +181,10 @@ export const WorkWithMeView: React.FC<{
               </label>
               <textarea
                 id="work-message"
+                name="message"
                 rows={3}
+                required
+                toolparamdescription="Project scope, collaboration details, or message"
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
                 placeholder="What's on your mind?"
@@ -380,14 +395,22 @@ export const GetUpdatesModal: React.FC<{
             </p>
           </div>
         ) : (
-          <form onSubmit={handleSubmit} noValidate className="space-y-3">
+          <form
+            onSubmit={handleSubmit}
+            noValidate
+            toolname="subscribe_updates"
+            tooldescription="Subscribe to project releases and developer updates from the Link Hub owner."
+            className="space-y-3"
+          >
             <div>
               <label htmlFor="sub-name" className="sr-only">
                 Name (optional)
               </label>
               <input
                 id="sub-name"
+                name="name"
                 type="text"
+                toolparamdescription="Subscriber's optional display name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="Name (optional)"
@@ -401,7 +424,10 @@ export const GetUpdatesModal: React.FC<{
               </label>
               <input
                 id="sub-email"
+                name="email"
                 type="email"
+                required
+                toolparamdescription="Subscriber's email address"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@example.com"
@@ -443,7 +469,7 @@ export const ShareModal: React.FC<{
   const shareUrl = shareTarget === 'profile' ? baseUrl : `${baseUrl}#pass`;
 
   const handleCopy = () => {
-    navigator.clipboard?.writeText(shareUrl).catch(() => {});
+    navigator.clipboard?.writeText(shareUrl).catch(() => { });
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -489,11 +515,10 @@ export const ShareModal: React.FC<{
             role="radio"
             aria-checked={shareTarget === 'profile'}
             onClick={() => setShareTarget('profile')}
-            className={`min-h-[42px] sm:min-h-0 py-2 sm:py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
-              shareTarget === 'profile'
-                ? 'bg-[#3A2418] text-[#FAF6F0] shadow-xs'
-                : 'text-[#6B4A2E] hover:text-[#1A120E]'
-            }`}
+            className={`min-h-[42px] sm:min-h-0 py-2 sm:py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${shareTarget === 'profile'
+              ? 'bg-[#3A2418] text-[#FAF6F0] shadow-xs'
+              : 'text-[#6B4A2E] hover:text-[#1A120E]'
+              }`}
           >
             Profile
           </button>
@@ -502,11 +527,10 @@ export const ShareModal: React.FC<{
             role="radio"
             aria-checked={shareTarget === 'pass'}
             onClick={() => setShareTarget('pass')}
-            className={`min-h-[42px] sm:min-h-0 py-2 sm:py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
-              shareTarget === 'pass'
-                ? 'bg-[#3A2418] text-[#FAF6F0] shadow-xs'
-                : 'text-[#6B4A2E] hover:text-[#1A120E]'
-            }`}
+            className={`min-h-[42px] sm:min-h-0 py-2 sm:py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${shareTarget === 'pass'
+              ? 'bg-[#3A2418] text-[#FAF6F0] shadow-xs'
+              : 'text-[#6B4A2E] hover:text-[#1A120E]'
+              }`}
           >
             Pass
           </button>

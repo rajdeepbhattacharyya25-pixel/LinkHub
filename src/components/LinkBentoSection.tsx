@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, lazy, Suspense } from 'react';
 import {
   Pin,
   Play,
@@ -17,7 +17,35 @@ import {
 } from '../utils/hubLogic';
 import type { FeaturedSongConfig } from '../data/profileData';
 import { CardPreviewGraphic } from './CardPreviewGraphic';
-import { PageoDarkMapSvg, PublicGoogleMapShowcase } from './GoogleMapView';
+
+const LazyPublicMapBlock = lazy(() =>
+  import('./GoogleMapView').then((m) => ({
+    default: (props: {
+      coords: { lat: number; lng: number } | null;
+      zoom: number;
+      title: string;
+      overlayLabel: string;
+      subtitle: string;
+      gmpQuotaExceeded: boolean;
+      locationLabel: string;
+    }) => (
+      <m.PublicGoogleMapShowcase
+        coords={props.coords}
+        zoom={props.zoom}
+        title={props.title}
+        overlayLabel={props.overlayLabel}
+        subtitle={props.subtitle}
+        gmpQuotaExceeded={props.gmpQuotaExceeded}
+        fallbackGraphic={
+          <m.PageoDarkMapSvg
+            displayMapLabel={props.overlayLabel}
+            locationLabel={props.locationLabel}
+          />
+        }
+      />
+    ),
+  }))
+);
 import {
   buildGoogleMapsExternalUrl,
   buildOpenStreetMapExternalUrl,
@@ -53,7 +81,7 @@ interface LinkBentoSectionProps {
   onRecordClick?: (id: string) => void;
 }
 
-export const LinkBentoSection: React.FC<LinkBentoSectionProps> = ({
+export const LinkBentoSection: React.FC<LinkBentoSectionProps> = React.memo(({
   links,
   customCategories = [],
   location,
@@ -72,8 +100,30 @@ export const LinkBentoSection: React.FC<LinkBentoSectionProps> = ({
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [showAllLinks, setShowAllLinks] = useState(false);
   const [isPlayingPreview, setIsPlayingPreview] = useState(false);
+  const [mapInView, setMapInView] = useState(false);
+  const mapSectionRef = useRef<HTMLElement | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const intervalRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (mapInView) return;
+    const node = mapSectionRef.current;
+    if (!node || typeof IntersectionObserver === 'undefined') {
+      setMapInView(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setMapInView(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '240px 0px' }
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [mapInView, showMapCard]);
 
   const dynamicCategories = extractAvailableCategories(links, customCategories);
   const activeFilter =
@@ -94,7 +144,7 @@ export const LinkBentoSection: React.FC<LinkBentoSectionProps> = ({
       intervalRef.current = null;
     }
     if (audioCtxRef.current) {
-      audioCtxRef.current.close().catch(() => {});
+      audioCtxRef.current.close().catch(() => { });
       audioCtxRef.current = null;
     }
     setIsPlayingPreview(false);
@@ -151,7 +201,7 @@ export const LinkBentoSection: React.FC<LinkBentoSectionProps> = ({
   useEffect(() => {
     return () => {
       if (intervalRef.current) window.clearInterval(intervalRef.current);
-      if (audioCtxRef.current) audioCtxRef.current.close().catch(() => {});
+      if (audioCtxRef.current) audioCtxRef.current.close().catch(() => { });
     };
   }, []);
 
@@ -216,9 +266,8 @@ export const LinkBentoSection: React.FC<LinkBentoSectionProps> = ({
                     setShowAllLinks(false);
                   }}
                   aria-pressed={activeFilter === tab.id}
-                  className={`px-3 py-1.5 sm:px-2 sm:py-0.5 min-h-[38px] sm:min-h-0 text-xs sm:text-[11px] font-semibold sm:font-medium rounded-lg sm:rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                    activeFilter === tab.id ? 'text-[#FAF6F0] shadow-xs' : 'hover:opacity-80'
-                  }`}
+                  className={`px-3 py-1.5 sm:px-2 sm:py-0.5 min-h-[38px] sm:min-h-0 text-xs sm:text-[11px] font-semibold sm:font-medium rounded-lg sm:rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${activeFilter === tab.id ? 'text-[#FAF6F0] shadow-xs' : 'hover:opacity-80'
+                    }`}
                   style={
                     activeFilter === tab.id
                       ? { backgroundColor: 'var(--lh-secondary-surface, #3A2418)' }
@@ -260,6 +309,7 @@ export const LinkBentoSection: React.FC<LinkBentoSectionProps> = ({
               <div key={item.id} className="relative group">
                 {item.pinned && (
                   <div
+                    role="img"
                     title="Primary link"
                     aria-label="Primary link"
                     className="absolute -top-1.5 -right-1.5 z-20 w-6 h-6 rounded-full text-[#FAF6F0] flex items-center justify-center shadow-md"
@@ -300,13 +350,13 @@ export const LinkBentoSection: React.FC<LinkBentoSectionProps> = ({
                       {item.title}
                     </p>
                     <p
-                      className="text-[11px] font-mono font-semibold truncate"
+                      className="text-xs sm:text-[11px] font-mono font-semibold truncate"
                       style={{ color: 'var(--lh-secondary-surface, #3A2418)' }}
                     >
                       {item.displayUrl}
                     </p>
                     <p
-                      className="text-[11px] font-medium line-clamp-2 leading-relaxed pt-0.5"
+                      className="text-xs sm:text-[11px] font-medium line-clamp-2 leading-relaxed pt-0.5"
                       style={{ color: 'var(--lh-primary-text, #2D1C12)', opacity: 0.85 }}
                     >
                       {item.description}
@@ -404,11 +454,10 @@ export const LinkBentoSection: React.FC<LinkBentoSectionProps> = ({
                 type="button"
                 onClick={toggleAudioPreview}
                 aria-label={isPlayingPreview ? 'Pause synth preview' : 'Preview synth loop'}
-                className={`inline-flex items-center gap-1.5 px-3 py-2 sm:py-1.5 min-h-[42px] sm:min-h-0 rounded-xl text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer border ${
-                  isPlayingPreview
-                    ? 'bg-[#3A2418] text-[#FAF6F0] border-[#3A2418]'
-                    : 'bg-[#F3ECE1] text-[#3A2418] border-[#D5C4AE] hover:border-[#A88462]'
-                }`}
+                className={`inline-flex items-center gap-1.5 px-3 py-2 sm:py-1.5 min-h-[42px] sm:min-h-0 rounded-xl text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer border ${isPlayingPreview
+                  ? 'bg-[#3A2418] text-[#FAF6F0] border-[#3A2418]'
+                  : 'bg-[#F3ECE1] text-[#3A2418] border-[#D5C4AE] hover:border-[#A88462]'
+                  }`}
               >
                 {isPlayingPreview ? (
                   <>
@@ -437,13 +486,12 @@ export const LinkBentoSection: React.FC<LinkBentoSectionProps> = ({
                     >
                       <div className="flex items-center gap-2.5">
                         <span
-                          className={`w-6 h-6 sm:w-5 sm:h-5 rounded-md flex items-center justify-center text-[10px] font-bold ${
-                            platform.name === 'Spotify'
-                              ? 'bg-[#6B4A2E] text-[#FAF6F0]'
-                              : platform.name === 'Apple Music'
+                          className={`w-6 h-6 sm:w-5 sm:h-5 rounded-md flex items-center justify-center text-[10px] font-bold ${platform.name === 'Spotify'
+                            ? 'bg-[#6B4A2E] text-[#FAF6F0]'
+                            : platform.name === 'Apple Music'
                               ? 'bg-[#A88462] text-[#1A120E]'
                               : 'bg-[#3A2418] text-[#D5C4AE]'
-                          }`}
+                            }`}
                         >
                           <Play className="w-2.5 h-2.5 fill-current" />
                         </span>
@@ -474,6 +522,7 @@ export const LinkBentoSection: React.FC<LinkBentoSectionProps> = ({
 
           {/* PAGEO-STYLE DARK STREET MAP + LIVE GOOGLE MAP SHOWCASE CARD */}
           <section
+            ref={mapSectionRef}
             aria-label="Location map"
             className="rounded-2xl overflow-hidden border shadow-xs"
             style={{
@@ -481,20 +530,25 @@ export const LinkBentoSection: React.FC<LinkBentoSectionProps> = ({
               borderColor: 'var(--lh-border-color, #D5C4AE)',
             }}
           >
-            <PublicGoogleMapShowcase
-              coords={resolvedCoords}
-              zoom={mapZoom}
-              title={location.trim() || mapLabel.trim() || 'Pinned Location'}
-              overlayLabel={displayMapLabel}
-              subtitle={displayCoordsLabel}
-              gmpQuotaExceeded={gmpQuotaExceeded}
-              fallbackGraphic={
-                <PageoDarkMapSvg
-                  displayMapLabel={displayMapLabel}
+            {mapInView ? (
+              <Suspense
+                fallback={
+                  <div className="w-full h-[210px] sm:h-[224px] bg-[#281810] animate-pulse" />
+                }
+              >
+                <LazyPublicMapBlock
+                  coords={resolvedCoords}
+                  zoom={mapZoom}
+                  title={location.trim() || mapLabel.trim() || 'Pinned Location'}
+                  overlayLabel={displayMapLabel}
+                  subtitle={displayCoordsLabel}
+                  gmpQuotaExceeded={gmpQuotaExceeded}
                   locationLabel={location}
                 />
-              }
-            />
+              </Suspense>
+            ) : (
+              <div className="w-full h-[210px] sm:h-[224px] bg-[#281810]" />
+            )}
 
             <div
               className="p-3.5 sm:px-4 sm:py-3.5 border-t space-y-2"
@@ -588,4 +642,4 @@ export const LinkBentoSection: React.FC<LinkBentoSectionProps> = ({
       )}
     </div>
   );
-};
+});
