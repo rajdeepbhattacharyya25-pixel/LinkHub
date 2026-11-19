@@ -64,6 +64,8 @@ import {
   ADMIN_WORKSPACE_GROUPS,
   getWorkspaceGroupForTab,
   computeWorkspaceGroupBadges,
+  parseSpotifyUrl,
+  fetchSpotifyMetadata,
   type LinkCardItem,
   type AdminWorkspaceGroupId,
 } from '../utils/hubLogic';
@@ -274,7 +276,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
     configRef.current = nextConfig;
     commitLocalConfig(nextConfig);
     if (!ownerUid) {
-      if (successMsg) triggerSavedBanner(successMsg);
+      if (successMsg) triggerSavedBanner('Saved locally (Google Sign-In required to sync live)');
       return true;
     }
     setSavingToCloud(true);
@@ -463,27 +465,29 @@ export const AdminPage: React.FC<AdminPageProps> = ({
     key: K,
     value: SiteConfigState['profile'][K]
   ) => {
+    const latest = configRef.current;
     onUpdateConfig({
-      ...config,
+      ...latest,
       profile: {
-        ...config.profile,
+        ...latest.profile,
         [key]: value,
       },
     });
   };
 
   const handleLocationInputChange = (nextLocation: string) => {
+    const latest = configRef.current;
     const trimmed = nextLocation.trim();
     const shouldAutoFillMapLabel =
-      !config.profile.mapLabel.trim() ||
-      config.profile.mapLabel.trim() === config.profile.location.trim().toUpperCase();
+      !latest.profile.mapLabel.trim() ||
+      latest.profile.mapLabel.trim() === latest.profile.location.trim().toUpperCase();
     onUpdateConfig({
-      ...config,
-      showMapCard: trimmed ? true : config.showMapCard,
+      ...latest,
+      showMapCard: trimmed ? true : latest.showMapCard,
       profile: {
-        ...config.profile,
+        ...latest.profile,
         location: nextLocation,
-        mapLabel: shouldAutoFillMapLabel ? trimmed.toUpperCase() : config.profile.mapLabel,
+        mapLabel: shouldAutoFillMapLabel ? trimmed.toUpperCase() : latest.profile.mapLabel,
       },
     });
   };
@@ -3681,9 +3685,10 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                   <input
                     type="checkbox"
                     checked={config.showSongCard}
-                    onChange={(e) =>
-                      onUpdateConfig({ ...config, showSongCard: e.target.checked })
-                    }
+                    onChange={(e) => {
+                      const latest = configRef.current;
+                      onUpdateConfig({ ...latest, showSongCard: e.target.checked });
+                    }}
                     aria-label="Toggle Featured Song card"
                     className="accent-[#3A2418]"
                   />
@@ -3697,12 +3702,13 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                     <input
                       type="text"
                       value={config.featuredSong.title}
-                      onChange={(e) =>
+                      onChange={(e) => {
+                        const latest = configRef.current;
                         onUpdateConfig({
-                          ...config,
-                          featuredSong: { ...config.featuredSong, title: e.target.value },
-                        })
-                      }
+                          ...latest,
+                          featuredSong: { ...latest.featuredSong, title: e.target.value },
+                        });
+                      }}
                       className="w-full min-h-[36px] px-2.5 py-1.5 rounded-lg sm:rounded-xl bg-[#F4EDE2] border border-[#B89B7E] text-[12px] sm:text-xs text-[#1A120E]"
                     />
                   </div>
@@ -3713,12 +3719,13 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                     <input
                       type="text"
                       value={config.featuredSong.artist}
-                      onChange={(e) =>
+                      onChange={(e) => {
+                        const latest = configRef.current;
                         onUpdateConfig({
-                          ...config,
-                          featuredSong: { ...config.featuredSong, artist: e.target.value },
-                        })
-                      }
+                          ...latest,
+                          featuredSong: { ...latest.featuredSong, artist: e.target.value },
+                        });
+                      }}
                       className="w-full min-h-[36px] px-2.5 py-1.5 rounded-lg sm:rounded-xl bg-[#F4EDE2] border border-[#B89B7E] text-[12px] sm:text-xs text-[#1A120E]"
                     />
                   </div>
@@ -3734,8 +3741,11 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                   const existing = config.featuredSong.platforms.find(
                     (p) => p.id === slot.id || p.name.toLowerCase() === slot.name.toLowerCase()
                   );
+                  const spotifyInfo =
+                    slot.id === 'spotify' && existing?.url ? parseSpotifyUrl(existing.url) : null;
+
                   return (
-                    <div key={slot.id} className="space-y-1">
+                    <div key={slot.id} className="space-y-1.5">
                       <label className="block text-[11.5px] font-ibm-mono font-bold text-[#3A2418]">
                         {slot.name} URL
                       </label>
@@ -3745,7 +3755,8 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                         placeholder={slot.placeholder}
                         onChange={(e) => {
                           const nextUrl = e.target.value;
-                          const rest = config.featuredSong.platforms.filter(
+                          const latest = configRef.current;
+                          const rest = latest.featuredSong.platforms.filter(
                             (p) =>
                               p.id !== slot.id &&
                               p.name.toLowerCase() !== slot.name.toLowerCase()
@@ -3756,21 +3767,69 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                                 {
                                   id: slot.id,
                                   name: slot.name,
-                                  url: nextUrl,
+                                  url: nextUrl.trim(),
                                   duration: existing?.duration || '',
                                 },
                               ]
                             : rest;
-                          onUpdateConfig({
-                            ...config,
+
+                          const isValidSpotify =
+                            slot.id === 'spotify' && Boolean(parseSpotifyUrl(nextUrl));
+
+                          const nextConfig: SiteConfigState = {
+                            ...latest,
+                            showSongCard: isValidSpotify ? true : latest.showSongCard,
                             featuredSong: {
-                              ...config.featuredSong,
+                              ...latest.featuredSong,
                               platforms: nextPlatforms,
                             },
-                          });
+                          };
+
+                          onUpdateConfig(nextConfig);
+
+                          if (slot.id === 'spotify' && nextUrl.trim()) {
+                            void fetchSpotifyMetadata(nextUrl).then((meta) => {
+                              if (meta?.title && !configRef.current.featuredSong.title.trim()) {
+                                const currentLatest = configRef.current;
+                                onUpdateConfig({
+                                  ...currentLatest,
+                                  featuredSong: {
+                                    ...currentLatest.featuredSong,
+                                    title: meta.title,
+                                  },
+                                });
+                              }
+                            });
+                          }
                         }}
                         className="w-full min-h-[34px] px-2.5 py-1.5 rounded-lg sm:rounded-xl bg-[#F4EDE2] border border-[#B89B7E] font-ibm-mono text-[11.5px] sm:text-[11px] text-[#1A120E]"
                       />
+
+                      {/* Live Spotify Player Embed Inside Admin Studio */}
+                      {slot.id === 'spotify' && spotifyInfo && (
+                        <div className="mt-2 p-2.5 rounded-xl bg-[#FAF6F0] border border-[#B89B7E] space-y-1.5">
+                          <div className="flex items-center justify-between text-[11px] font-bold text-[#3A2418]">
+                            <span className="flex items-center gap-1.5">
+                              <span className="w-2 h-2 rounded-full bg-[#1DB954] animate-pulse" />
+                              Live Spotify Player Preview
+                            </span>
+                            <span className="text-[10px] text-[#5C3D24]">Streams directly on live site</span>
+                          </div>
+                          <div className="rounded-lg overflow-hidden bg-[#121212] border border-[#B89B7E]/40">
+                            <iframe
+                              src={spotifyInfo.embedUrl}
+                              width="100%"
+                              height={spotifyInfo.type === 'track' ? 80 : 152}
+                              frameBorder="0"
+                              allowFullScreen
+                              allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+                              loading="lazy"
+                              title="Admin Spotify Preview"
+                              className="w-full block"
+                            />
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })}

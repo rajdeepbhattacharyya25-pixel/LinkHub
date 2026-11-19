@@ -63,11 +63,24 @@ export async function fetchPublicHubAndLinksRest(
   }
 
   const baseUrl = getBaseFirestoreRestUrl();
+  const cacheBuster = Date.now();
   const [hubRes, linksRes] = await Promise.all([
-    fetch(`${baseUrl}/hub/public?key=${encodeURIComponent(API_KEY)}`, { signal }),
-    fetch(`${baseUrl}:runQuery?key=${encodeURIComponent(API_KEY)}`, {
+    fetch(`${baseUrl}/hub/public?key=${encodeURIComponent(API_KEY)}&_t=${cacheBuster}`, {
+      cache: 'no-store',
+      headers: {
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        Pragma: 'no-cache',
+      },
+      signal,
+    }),
+    fetch(`${baseUrl}:runQuery?key=${encodeURIComponent(API_KEY)}&_t=${cacheBuster}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      cache: 'no-store',
+      headers: {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        Pragma: 'no-cache',
+      },
       body: JSON.stringify({
         structuredQuery: {
           from: [{ collectionId: 'links' }],
@@ -151,7 +164,14 @@ export async function ensurePublicMediaHydratedRest(rawUrl: string): Promise<str
   try {
     const baseUrl = getBaseFirestoreRestUrl();
     const res = await fetch(
-      `${baseUrl}/publicMedia/${encodeURIComponent(mediaId)}?key=${encodeURIComponent(API_KEY)}`
+      `${baseUrl}/publicMedia/${encodeURIComponent(mediaId)}?key=${encodeURIComponent(API_KEY)}&_t=${Date.now()}`,
+      {
+        cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          Pragma: 'no-cache',
+        },
+      }
     );
     if (!res.ok) return trimmed;
     const docJson = (await res.json()) as { fields?: Record<string, unknown> };

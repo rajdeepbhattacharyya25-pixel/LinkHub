@@ -13,6 +13,7 @@ import {
   sortAndFilterLinks,
   paginateLinksWithShowAll,
   extractAvailableCategories,
+  parseSpotifyUrl,
   type LinkCardItem,
 } from '../utils/hubLogic';
 import type { FeaturedSongConfig } from '../data/profileData';
@@ -206,8 +207,15 @@ export const LinkBentoSection: React.FC<LinkBentoSectionProps> = React.memo(({
   }, []);
 
   const songPlatformsWithUrls = (featuredSong.platforms || []).filter((p) => p.url && p.url.trim());
+  const spotifyPlatform = songPlatformsWithUrls.find(
+    (p) => p.name.toLowerCase() === 'spotify' || p.id === 'spotify'
+  );
+  const spotifyInfo = spotifyPlatform ? parseSpotifyUrl(spotifyPlatform.url) : null;
+  const otherPlatforms = songPlatformsWithUrls.filter(
+    (p) => p.name.toLowerCase() !== 'spotify' && p.id !== 'spotify'
+  );
   const hasSongContent = Boolean(
-    featuredSong.title.trim() || featuredSong.artist.trim() || songPlatformsWithUrls.length > 0
+    featuredSong.title.trim() || featuredSong.artist.trim() || songPlatformsWithUrls.length > 0 || spotifyInfo
   );
   const mapLocationPayload = {
     location,
@@ -413,100 +421,178 @@ export const LinkBentoSection: React.FC<LinkBentoSectionProps> = React.memo(({
               borderWidth: '1px',
             }}
           >
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-3 min-w-0">
-                {/* Album Art */}
-                <div
-                  className="w-12 h-12 rounded-xl flex flex-col items-center justify-center shrink-0 relative overflow-hidden shadow-xs"
-                  style={{
-                    background:
-                      'linear-gradient(135deg, var(--lh-secondary-surface, #3A2418), var(--lh-accent-primary, #6B4A2E))',
-                    borderColor: 'var(--lh-accent-secondary, #A88462)',
-                    borderWidth: '1px',
-                  }}
-                >
-                  <div className="w-4 h-4 rounded-full border border-[#FAF6F0]/60 flex items-center justify-center">
-                    <div className="w-1.5 h-1.5 rounded-full bg-[#D5C4AE]" />
+            {spotifyInfo ? (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-2 px-0.5">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="w-2.5 h-2.5 rounded-full bg-[#1DB954] animate-pulse shrink-0" />
+                    <span className="text-[11px] font-bold tracking-wider uppercase text-[#3A2418] truncate">
+                      {featuredSong.type || 'Featured Track'}
+                      {featuredSong.title ? ` · ${featuredSong.title}` : ''}
+                    </span>
                   </div>
-                  <span className="text-[7px] font-mono text-[#FAF6F0] font-semibold mt-0.5 truncate max-w-[40px]">
-                    {featuredSong.artist || 'AUDIO'}
-                  </span>
-                </div>
-
-                <div className="min-w-0">
-                  <div className="text-[10px] text-[#3A2418] font-bold uppercase tracking-wider">
-                    {featuredSong.type || 'Song'}
-                  </div>
-                  {featuredSong.title && (
-                    <div className="text-xs font-bold text-[#1A120E] truncate">
-                      {featuredSong.title}
-                    </div>
-                  )}
-                  {featuredSong.artist && (
-                    <div className="text-[11px] font-semibold text-[#3A2418]">
-                      {featuredSong.artist}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={toggleAudioPreview}
-                aria-label={isPlayingPreview ? 'Pause synth preview' : 'Preview synth loop'}
-                className={`inline-flex items-center gap-1.5 px-3 py-2 sm:py-1.5 min-h-[42px] sm:min-h-0 rounded-xl text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer border ${isPlayingPreview
-                  ? 'bg-[#3A2418] text-[#FAF6F0] border-[#3A2418]'
-                  : 'bg-[#F3ECE1] text-[#3A2418] border-[#D5C4AE] hover:border-[#A88462]'
-                  }`}
-              >
-                {isPlayingPreview ? (
-                  <>
-                    <Pause className="w-3.5 h-3.5 sm:w-3 sm:h-3 fill-current" />
-                    <span>Stop preview</span>
-                  </>
-                ) : (
-                  <>
-                    <Volume2 className="w-3.5 h-3.5 sm:w-3 sm:h-3" />
-                    <span>Preview audio</span>
-                  </>
-                )}
-              </button>
-            </div>
-
-            {songPlatformsWithUrls.length > 0 && (
-              <ul className="rounded-xl bg-[#F4EDE2]/75 border border-[#D5C4AE] divide-y divide-[#D5C4AE]/70">
-                {songPlatformsWithUrls.map((platform) => (
-                  <li key={platform.id}>
+                  {spotifyPlatform?.url && (
                     <a
-                      href={platform.url}
+                      href={spotifyPlatform.url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      aria-label={`Play ${featuredSong.title || 'track'} on ${platform.name}`}
-                      className="flex items-center justify-between px-3 py-3 sm:py-2.5 min-h-[48px] hover:bg-[#EAE0D3]/70 transition-colors first:rounded-t-xl last:rounded-b-xl group"
+                      className="text-[11px] font-semibold text-[#6B4A2E] hover:text-[#1A120E] inline-flex items-center gap-1 shrink-0 transition-colors"
+                      aria-label="Open in Spotify"
                     >
-                      <div className="flex items-center gap-2.5">
-                        <span
-                          className={`w-6 h-6 sm:w-5 sm:h-5 rounded-md flex items-center justify-center text-[10px] font-bold ${platform.name === 'Spotify'
-                            ? 'bg-[#6B4A2E] text-[#FAF6F0]'
-                            : platform.name === 'Apple Music'
-                              ? 'bg-[#A88462] text-[#1A120E]'
-                              : 'bg-[#3A2418] text-[#D5C4AE]'
-                            }`}
-                        >
-                          <Play className="w-2.5 h-2.5 fill-current" />
-                        </span>
-                        <span className="text-xs font-semibold text-[#1A120E]">
-                          {platform.name}
-                        </span>
-                      </div>
-
-                      <span className="px-3.5 py-1.5 sm:px-3 sm:py-1 rounded-full border border-[#D5C4AE] bg-[#FAF6F0] text-[11px] font-semibold text-[#3A2418] group-hover:border-[#6B4A2E] group-hover:bg-[#3A2418] group-hover:text-[#FAF6F0] transition-colors">
-                        Play
-                      </span>
+                      <span>Open App</span>
+                      <ArrowUpRight className="w-3.5 h-3.5" />
                     </a>
-                  </li>
-                ))}
-              </ul>
+                  )}
+                </div>
+
+                <div className="rounded-xl overflow-hidden shadow-xs bg-[#121212] border border-[#B89B7E]/50">
+                  <iframe
+                    src={spotifyInfo.embedUrl}
+                    width="100%"
+                    height={spotifyInfo.type === 'track' ? 80 : 152}
+                    frameBorder="0"
+                    allowFullScreen
+                    allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+                    loading="lazy"
+                    title={featuredSong.title ? `Spotify Player: ${featuredSong.title}` : 'Spotify Track Player'}
+                    className="w-full block"
+                  />
+                </div>
+
+                {otherPlatforms.length > 0 && (
+                  <ul className="rounded-xl bg-[#F4EDE2]/75 border border-[#D5C4AE] divide-y divide-[#D5C4AE]/70">
+                    {otherPlatforms.map((platform) => (
+                      <li key={platform.id}>
+                        <a
+                          href={platform.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          aria-label={`Play ${featuredSong.title || 'track'} on ${platform.name}`}
+                          className="flex items-center justify-between px-3 py-2.5 min-h-[44px] hover:bg-[#EAE0D3]/70 transition-colors first:rounded-t-xl last:rounded-b-xl group"
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <span
+                              className={`w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold ${
+                                platform.name === 'Apple Music'
+                                  ? 'bg-[#A88462] text-[#1A120E]'
+                                  : 'bg-[#3A2418] text-[#D5C4AE]'
+                              }`}
+                            >
+                              <Play className="w-2.5 h-2.5 fill-current" />
+                            </span>
+                            <span className="text-xs font-semibold text-[#1A120E]">
+                              {platform.name}
+                            </span>
+                          </div>
+                          <span className="px-3 py-1 rounded-full border border-[#D5C4AE] bg-[#FAF6F0] text-[11px] font-semibold text-[#3A2418] group-hover:border-[#6B4A2E] group-hover:bg-[#3A2418] group-hover:text-[#FAF6F0] transition-colors">
+                            Play
+                          </span>
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ) : (
+              <>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    {/* Album Art */}
+                    <div
+                      className="w-12 h-12 rounded-xl flex flex-col items-center justify-center shrink-0 relative overflow-hidden shadow-xs"
+                      style={{
+                        background:
+                          'linear-gradient(135deg, var(--lh-secondary-surface, #3A2418), var(--lh-accent-primary, #6B4A2E))',
+                        borderColor: 'var(--lh-accent-secondary, #A88462)',
+                        borderWidth: '1px',
+                      }}
+                    >
+                      <div className="w-4 h-4 rounded-full border border-[#FAF6F0]/60 flex items-center justify-center">
+                        <div className="w-1.5 h-1.5 rounded-full bg-[#D5C4AE]" />
+                      </div>
+                      <span className="text-[7px] font-mono text-[#FAF6F0] font-semibold mt-0.5 truncate max-w-[40px]">
+                        {featuredSong.artist || 'AUDIO'}
+                      </span>
+                    </div>
+
+                    <div className="min-w-0">
+                      <div className="text-[10px] text-[#3A2418] font-bold uppercase tracking-wider">
+                        {featuredSong.type || 'Song'}
+                      </div>
+                      {featuredSong.title && (
+                        <div className="text-xs font-bold text-[#1A120E] truncate">
+                          {featuredSong.title}
+                        </div>
+                      )}
+                      {featuredSong.artist && (
+                        <div className="text-[11px] font-semibold text-[#3A2418]">
+                          {featuredSong.artist}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={toggleAudioPreview}
+                    aria-label={isPlayingPreview ? 'Pause synth preview' : 'Preview synth loop'}
+                    className={`inline-flex items-center gap-1.5 px-3 py-2 sm:py-1.5 min-h-[42px] sm:min-h-0 rounded-xl text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer border ${
+                      isPlayingPreview
+                        ? 'bg-[#3A2418] text-[#FAF6F0] border-[#3A2418]'
+                        : 'bg-[#F3ECE1] text-[#3A2418] border-[#D5C4AE] hover:border-[#A88462]'
+                    }`}
+                  >
+                    {isPlayingPreview ? (
+                      <>
+                        <Pause className="w-3.5 h-3.5 sm:w-3 sm:h-3 fill-current" />
+                        <span>Stop preview</span>
+                      </>
+                    ) : (
+                      <>
+                        <Volume2 className="w-3.5 h-3.5 sm:w-3 sm:h-3" />
+                        <span>Preview audio</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {songPlatformsWithUrls.length > 0 && (
+                  <ul className="rounded-xl bg-[#F4EDE2]/75 border border-[#D5C4AE] divide-y divide-[#D5C4AE]/70">
+                    {songPlatformsWithUrls.map((platform) => (
+                      <li key={platform.id}>
+                        <a
+                          href={platform.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          aria-label={`Play ${featuredSong.title || 'track'} on ${platform.name}`}
+                          className="flex items-center justify-between px-3 py-3 sm:py-2.5 min-h-[48px] hover:bg-[#EAE0D3]/70 transition-colors first:rounded-t-xl last:rounded-b-xl group"
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <span
+                              className={`w-6 h-6 sm:w-5 sm:h-5 rounded-md flex items-center justify-center text-[10px] font-bold ${
+                                platform.name === 'Spotify'
+                                  ? 'bg-[#6B4A2E] text-[#FAF6F0]'
+                                  : platform.name === 'Apple Music'
+                                  ? 'bg-[#A88462] text-[#1A120E]'
+                                  : 'bg-[#3A2418] text-[#D5C4AE]'
+                              }`}
+                            >
+                              <Play className="w-2.5 h-2.5 fill-current" />
+                            </span>
+                            <span className="text-xs font-semibold text-[#1A120E]">
+                              {platform.name}
+                            </span>
+                          </div>
+
+                          <span className="px-3.5 py-1.5 sm:px-3 sm:py-1 rounded-full border border-[#D5C4AE] bg-[#FAF6F0] text-[11px] font-semibold text-[#3A2418] group-hover:border-[#6B4A2E] group-hover:bg-[#3A2418] group-hover:text-[#FAF6F0] transition-colors">
+                            Play
+                          </span>
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </>
             )}
           </div>
         )}

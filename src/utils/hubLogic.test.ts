@@ -19,6 +19,7 @@ import {
   formatCategoryFilterLabel,
   extractAvailableCategories,
   calculatePassTilt,
+  parseSpotifyUrl,
   type LinkCardItem,
 } from './hubLogic';
 import { isOwnedFirebaseMediaPath } from './mediaAndZip';
@@ -846,3 +847,32 @@ test('reorderListItems moves items immutably and guards out-of-bounds indices', 
   assert.deepEqual(reorderListItems(original, -1, 2), original);
   assert.deepEqual(reorderListItems(original, 0, 99), original);
 });
+
+test('parseSpotifyUrl parses various Spotify URL formats into official embed URLs', () => {
+  const track = parseSpotifyUrl('https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT?si=abc123xyz');
+  assert.ok(track);
+  assert.equal(track.type, 'track');
+  assert.equal(track.id, '4cOdK2wGLETKBW3PvgPWqT');
+  assert.equal(track.embedUrl, 'https://open.spotify.com/embed/track/4cOdK2wGLETKBW3PvgPWqT?utm_source=generator&theme=0');
+
+  const intlTrack = parseSpotifyUrl('https://open.spotify.com/intl-ja/track/4cOdK2wGLETKBW3PvgPWqT');
+  assert.ok(intlTrack);
+  assert.equal(intlTrack.type, 'track');
+  assert.equal(intlTrack.id, '4cOdK2wGLETKBW3PvgPWqT');
+
+  const album = parseSpotifyUrl('https://open.spotify.com/album/1DFixLWuPkv3KT3TnV35m3');
+  assert.ok(album);
+  assert.equal(album.type, 'album');
+
+  const playlist = parseSpotifyUrl('https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M');
+  assert.ok(playlist);
+  assert.equal(playlist.type, 'playlist');
+
+  const uri = parseSpotifyUrl('spotify:track:4cOdK2wGLETKBW3PvgPWqT');
+  assert.ok(uri);
+  assert.equal(uri.type, 'track');
+
+  assert.equal(parseSpotifyUrl('https://example.com/not-spotify'), null);
+  assert.equal(parseSpotifyUrl(''), null);
+});
+

@@ -823,3 +823,82 @@ export function computeWorkspaceGroupBadges(input: {
   };
 }
 
+export interface ParsedSpotifyInfo {
+  type: 'track' | 'album' | 'playlist' | 'artist' | 'episode';
+  id: string;
+  embedUrl: string;
+}
+
+export function parseSpotifyUrl(rawUrl: string): ParsedSpotifyInfo | null {
+  if (!rawUrl || typeof rawUrl !== 'string') return null;
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return null;
+
+  const embedMatch = trimmed.match(
+    /^https?:\/\/open\.spotify\.com\/embed\/(track|album|playlist|artist|episode)\/([a-zA-Z0-9]+)/i
+  );
+  if (embedMatch) {
+    const type = embedMatch[1].toLowerCase() as ParsedSpotifyInfo['type'];
+    const id = embedMatch[2];
+    return {
+      type,
+      id,
+      embedUrl: `https://open.spotify.com/embed/${type}/${id}?utm_source=generator&theme=0`,
+    };
+  }
+
+  const httpMatch = trimmed.match(
+    /^https?:\/\/open\.spotify\.com\/(?:intl-[a-z0-9-]+\/)?(track|album|playlist|artist|episode)\/([a-zA-Z0-9]+)/i
+  );
+  if (httpMatch) {
+    const type = httpMatch[1].toLowerCase() as ParsedSpotifyInfo['type'];
+    const id = httpMatch[2];
+    return {
+      type,
+      id,
+      embedUrl: `https://open.spotify.com/embed/${type}/${id}?utm_source=generator&theme=0`,
+    };
+  }
+
+  const uriMatch = trimmed.match(
+    /^spotify:(track|album|playlist|artist|episode):([a-zA-Z0-9]+)/i
+  );
+  if (uriMatch) {
+    const type = uriMatch[1].toLowerCase() as ParsedSpotifyInfo['type'];
+    const id = uriMatch[2];
+    return {
+      type,
+      id,
+      embedUrl: `https://open.spotify.com/embed/${type}/${id}?utm_source=generator&theme=0`,
+    };
+  }
+
+  return null;
+}
+
+export async function fetchSpotifyMetadata(
+  rawUrl: string,
+  signal?: AbortSignal
+): Promise<{ title?: string; thumbnailUrl?: string } | null> {
+  const parsed = parseSpotifyUrl(rawUrl);
+  if (!parsed) return null;
+  try {
+    const canonicalUrl = `https://open.spotify.com/${parsed.type}/${parsed.id}`;
+    const res = await fetch(`https://open.spotify.com/oembed?url=${encodeURIComponent(canonicalUrl)}`, {
+      signal,
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { title?: unknown; thumbnail_url?: unknown };
+    return {
+      title: typeof data.title === 'string' && data.title.trim() ? data.title.trim() : undefined,
+      thumbnailUrl:
+        typeof data.thumbnail_url === 'string' && data.thumbnail_url.trim()
+          ? data.thumbnail_url.trim()
+          : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+
